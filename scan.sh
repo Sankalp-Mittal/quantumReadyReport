@@ -443,13 +443,28 @@ RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RESET='\033[0m'
 TICK="${GREEN}✔${RESET}"; CROSS="${RED}✘${RESET}"; WARN="${YELLOW}⚠${RESET}"
 
 for host_entry in "${HOSTS[@]}"; do
-  # Support host:port syntax
-  if echo "$host_entry" | grep -q ':'; then
-    host="${host_entry%%:*}"
-    port="${host_entry##*:}"
-  else
-    host="$host_entry"
+  # Strip URL scheme and path — only the TLS layer matters, not the HTTP path
+  local_entry="$host_entry"
+  # Determine default port from scheme before stripping it
+  port="443"
+  if echo "$local_entry" | grep -qiE "^https://"; then
     port="443"
+    local_entry="${local_entry#https://}"
+    local_entry="${local_entry#http*://}"
+  elif echo "$local_entry" | grep -qiE "^http://"; then
+    port="80"
+    local_entry="${local_entry#http://}"
+  fi
+  # Strip path, query string, fragment
+  local_entry="${local_entry%%/*}"
+  local_entry="${local_entry%%\?*}"
+  local_entry="${local_entry%%#*}"
+  # Support explicit host:port syntax (overrides scheme-derived port)
+  if echo "$local_entry" | grep -qP ":\d+$"; then
+    host="${local_entry%:*}"
+    port="${local_entry##*:}"
+  else
+    host="$local_entry"
   fi
 
   $JSON_ONLY || echo -e "${DIM}  Scanning ${host}:${port}...${RESET}"
