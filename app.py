@@ -315,7 +315,7 @@ TEMPLATE = """<!DOCTYPE html>
       <div class="panel-title">Options</div>
       <label class="checkbox-row">
         <input type="checkbox" id="opt-subdomains">
-        Discover subdomains (subfinder)
+        Discover subdomains (Warning: This might take a lot of time to run)
       </label>
       <label class="checkbox-row">
         <input type="checkbox" id="opt-json">
