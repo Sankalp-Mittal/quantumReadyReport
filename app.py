@@ -30,6 +30,9 @@ _streams: dict[str, queue.Queue] = {}
 # In-memory report store: report_id → {html, ts, n_hosts, created_at}
 _reports: dict[str, dict] = {}
 
+# scan_id → report_id (set when scan finishes, independent of SSE lifetime)
+_scan_reports: dict[str, str] = {}
+
 # Reports are evicted after this many seconds (default 1 hour, override via env)
 REPORT_TTL = int(os.environ.get("REPORT_TTL", 3600))
 
@@ -42,6 +45,9 @@ def _reap_reports():
         expired = [rid for rid, m in list(_reports.items()) if m["created_at"] < cutoff]
         for rid in expired:
             _reports.pop(rid, None)
+        # Also clean up scan→report mappings whose report has been evicted
+        for sid in [s for s, r in list(_scan_reports.items()) if r in expired]:
+            _scan_reports.pop(sid, None)
         if expired:
             app.logger.info(f"Reaped {len(expired)} expired report(s). {len(_reports)} remaining.")
 
@@ -444,12 +450,33 @@ function openStream(scanId) {
     evtSource.close();
     const summary = JSON.parse(e.data || '{}');
     resetUI(`Done — ${summary.hosts || ''} host(s) scanned`);
+    if (!document.getElementById('report-link').classList.contains('visible')) {
+      pollReport(scanId);
+    }
   });
 
   evtSource.onerror = () => {
     evtSource.close();
-    resetUI('Stream disconnected');
+    resetUI('Scan running — waiting for report…');
+    pollReport(scanId);
   };
+}
+
+function pollReport(scanId) {
+  const interval = setInterval(() => {
+    fetch(`/report-ready/${scanId}`)
+      .then(r => r.json())
+      .then(data => {
+        if (data.report_id) {
+          clearInterval(interval);
+          const link = document.getElementById('report-link');
+          link.href = `/view/${data.report_id}`;
+          link.classList.add('visible');
+          resetUI('Done — report ready');
+        }
+      })
+      .catch(() => clearInterval(interval));
+  }, 5000);
 }
 
 function appendLine(term, html) {
@@ -580,6 +607,7 @@ def scan():
             q.put(("line", f"[report] Could not generate report: {exc}"))
 
         if report_id:
+            _scan_reports[scan_id] = report_id
             q.put(("report", report_id))
         q.put(("done", {"hosts": len(hosts)}))
 
@@ -596,7 +624,7 @@ def stream(scan_id):
     def generate():
         import json as _json
         import time
-        deadline = time.monotonic() + 600  # 10-minute hard cap
+        deadline = time.monotonic() + 7200  # 2-hour hard cap
         while True:
             if time.monotonic() > deadline:
                 yield "event: done\ndata: {}\n\n"
@@ -621,6 +649,14 @@ def stream(scan_id):
 
     return Response(generate(), mimetype="text/event-stream",
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
+
+
+@app.route("/report-ready/<scan_id>")
+def report_ready(scan_id):
+    rid = _scan_reports.get(scan_id)
+    if rid:
+        return jsonify({"report_id": rid})
+    return jsonify({"report_id": None})
 
 
 @app.route("/view/<report_id>")
