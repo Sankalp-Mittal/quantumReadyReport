@@ -96,17 +96,18 @@ The scanner will also use a system-installed `subfinder` if `bin/subfinder` is a
 
 ## Quick start
 
-### Web GUI (recommended)
+### Run locally
 
 ```bash
 git clone <repo-url> && cd quantumCheck
 pip install -r requirements.txt
 python3 app.py
+# Open http://localhost:5000
 ```
 
-Open **http://localhost:5000** in your browser.
+### Deploy on AWS (Docker)
 
-Enter one or more hostnames, tick options, and press **Run Scan**. Output streams live to the terminal panel. When the scan finishes, **View HTML Report →** opens the full interactive dashboard.
+See the [Deployment — AWS](#deployment--aws) section below.
 
 ### CLI
 
@@ -119,10 +120,7 @@ chmod +x scan.sh
 # Multiple hosts
 ./scan.sh google.com cloudflare.com github.com
 
-# From a file
-./scan.sh -f domains.txt --report
-
-# With subdomain discovery
+# With subdomain discovery + report
 ./scan.sh antaragni.in --subdomains --report
 ```
 
@@ -306,6 +304,113 @@ ssl_ciphers TLS_AES_256_GCM_SHA384:TLS_CHACHA20_POLY1305_SHA256;
 ### Step 3 — Plan certificate migration (2026–2028 target)
 
 Once CA/Browser Forum trust stores include PQC root CAs, migrate to ML-DSA using hybrid certificates (classical + PQC key) for backward compatibility.
+
+---
+
+## Deployment — AWS
+
+The project ships with a `Dockerfile` that bundles everything (OpenSSL, subfinder, Python deps). Any AWS service that runs Docker containers will work.
+
+### Option A — EC2 (free tier, simplest)
+
+**1. Launch an instance**
+- AMI: Ubuntu 22.04 LTS
+- Type: `t2.micro` (free tier eligible)
+- Security group inbound rules:
+
+| Port | Source | Purpose |
+|---|---|---|
+| 22 | Your IP | SSH |
+| 5000 | 0.0.0.0/0 | Web app |
+
+**2. Install Docker and run the app**
+
+```bash
+# SSH in
+ssh -i your-key.pem ubuntu@<EC2_PUBLIC_IP>
+
+# Install Docker
+sudo apt update && sudo apt install -y docker.io
+sudo usermod -aG docker ubuntu
+newgrp docker
+
+# Clone and build
+git clone https://github.com/sankalp-mittal/quantumCheck.git
+cd quantumCheck
+docker build -t pqc-scanner .
+
+# Run (restarts automatically on crash)
+docker run -d \
+  --name pqc-scanner \
+  --restart unless-stopped \
+  -p 5000:5000 \
+  -e PORT=5000 \
+  -e REPORT_TTL=3600 \
+  pqc-scanner
+```
+
+App is live at **http://\<EC2_PUBLIC_IP\>:5000**
+
+**Useful commands:**
+```bash
+docker logs -f pqc-scanner   # live logs
+docker restart pqc-scanner   # restart
+docker stop pqc-scanner      # stop
+```
+
+---
+
+### Option B — Elastic Beanstalk (managed, auto-scaling)
+
+**1. Install the EB CLI**
+```bash
+pip install awsebcli
+```
+
+**2. Initialise and deploy**
+```bash
+cd quantumCheck
+eb init -p docker pqc-scanner --region ap-south-1
+eb create pqc-scanner-env
+eb open
+```
+
+Elastic Beanstalk builds the `Dockerfile` automatically and provisions a load-balanced environment. Set environment variables under **Configuration → Software → Environment properties**:
+
+| Key | Value |
+|---|---|
+| `PORT` | `8080` |
+| `REPORT_TTL` | `3600` |
+
+---
+
+### Option C — ECS Fargate (production-grade)
+
+**1. Push image to ECR**
+```bash
+aws ecr create-repository --repository-name pqc-scanner --region ap-south-1
+aws ecr get-login-password --region ap-south-1 \
+  | docker login --username AWS --password-stdin \
+    <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com
+
+docker build -t pqc-scanner .
+docker tag pqc-scanner:latest \
+  <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com/pqc-scanner:latest
+docker push \
+  <ACCOUNT_ID>.dkr.ecr.ap-south-1.amazonaws.com/pqc-scanner:latest
+```
+
+**2. Create ECS cluster + Fargate task + service** via the AWS Console or CLI, setting:
+- Container port: `5000`
+- Environment variable `PORT=5000`
+- Environment variable `REPORT_TTL=3600`
+
+### Environment variables
+
+| Variable | Default | Description |
+|---|---|---|
+| `PORT` | `5000` | Port the server listens on |
+| `REPORT_TTL` | `3600` | Seconds before an in-memory report is evicted |
 
 ---
 

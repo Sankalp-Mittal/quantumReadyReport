@@ -16,6 +16,7 @@ from datetime import datetime
 from pathlib import Path
 
 from flask import Flask, Response, jsonify, render_template_string, request, send_file
+from generate_report import render_html as _render_report, load_cbom as _load_cbom
 
 app = Flask(__name__)
 
@@ -23,8 +24,26 @@ SCRIPT_DIR = Path(__file__).parent
 OUTPUT_DIR = SCRIPT_DIR / "output"
 SCAN_SH    = SCRIPT_DIR / "scan.sh"
 
-# Active scan streams: scan_id → Queue of lines (None = done)
+# Active scan streams: scan_id → Queue of lines
 _streams: dict[str, queue.Queue] = {}
+
+# In-memory report store: report_id → {html, ts, n_hosts, created_at}
+_reports: dict[str, dict] = {}
+
+# Reports are evicted after this many seconds (default 1 hour, override via env)
+REPORT_TTL = int(os.environ.get("REPORT_TTL", 3600))
+
+
+def _reap_reports():
+    """Background thread: delete reports older than REPORT_TTL every 5 minutes."""
+    while True:
+        time.sleep(300)
+        cutoff = time.monotonic() - REPORT_TTL
+        expired = [rid for rid, m in list(_reports.items()) if m["created_at"] < cutoff]
+        for rid in expired:
+            _reports.pop(rid, None)
+        if expired:
+            app.logger.info(f"Reaped {len(expired)} expired report(s). {len(_reports)} remaining.")
 
 # ── HTML template ─────────────────────────────────────────────────────────────
 TEMPLATE = """<!DOCTYPE html>
@@ -171,25 +190,6 @@ TEMPLATE = """<!DOCTYPE html>
   .btn-scan:active { transform: scale(0.98); }
   .btn-scan:disabled { opacity: 0.35; cursor: not-allowed; }
 
-  /* ── Past scans ── */
-  .past-scans { display: flex; flex-direction: column; gap: 0.4rem; }
-  .past-item {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    gap: 0.5rem;
-    padding: 0.5rem 0.7rem;
-    background: var(--bg2);
-    border: 1px solid var(--border);
-    border-radius: 2px;
-    font-size: 0.72rem;
-    flex-wrap: wrap;
-  }
-  .past-item a { color: var(--accent); text-decoration: none; }
-  .past-item a:hover { text-decoration: underline; }
-  .past-item .ts { color: var(--text3); font-size: 0.65rem; }
-  .no-scans { font-size: 0.75rem; color: var(--text3); }
-
   /* ── Output panel ── */
   .output-panel {
     padding: 1.5rem 2rem;
@@ -318,12 +318,8 @@ TEMPLATE = """<!DOCTYPE html>
         Discover subdomains (subfinder)
       </label>
       <label class="checkbox-row">
-        <input type="checkbox" id="opt-report" checked>
-        Generate HTML report
-      </label>
-      <label class="checkbox-row">
         <input type="checkbox" id="opt-json">
-        Save JSON only (no terminal output)
+        JSON output only (no terminal colour)
       </label>
     </div>
 
@@ -331,19 +327,13 @@ TEMPLATE = """<!DOCTYPE html>
       Run Scan
     </button>
 
-    <div>
-      <div class="panel-title" style="margin-bottom:0.8rem;">Past Reports</div>
-      <div class="past-scans" id="past-scans">
-        {{ past_scans_html | safe }}
-      </div>
-    </div>
   </aside>
 
   <!-- ── Right: Output ── -->
   <section class="output-panel">
     <div class="output-header">
       <div class="output-title">Terminal Output</div>
-      <a href="#" class="report-link" id="report-link" target="_blank">View HTML Report →</a>
+      <a href="#" class="report-link" id="report-link">View HTML Report →</a>
     </div>
 
     <div class="terminal" id="terminal">
@@ -405,7 +395,6 @@ function startScan() {
 
   const hosts      = hostsRaw.split('\\n').map(h => h.trim()).filter(Boolean);
   const subdomains = document.getElementById('opt-subdomains').checked;
-  const report     = document.getElementById('opt-report').checked;
   const jsonOnly   = document.getElementById('opt-json').checked;
 
   // Reset UI
@@ -422,7 +411,7 @@ function startScan() {
   fetch('/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ hosts, subdomains, report, json_only: jsonOnly })
+    body: JSON.stringify({ hosts, subdomains, json_only: jsonOnly })
   })
   .then(r => r.json())
   .then(data => {
@@ -447,7 +436,7 @@ function openStream(scanId) {
 
   evtSource.addEventListener('report', e => {
     const link = document.getElementById('report-link');
-    link.href = `/report/${e.data}`;
+    link.href = `/view/${e.data}`;
     link.classList.add('visible');
   });
 
@@ -455,7 +444,6 @@ function openStream(scanId) {
     evtSource.close();
     const summary = JSON.parse(e.data || '{}');
     resetUI(`Done — ${summary.hosts || ''} host(s) scanned`);
-    refreshPastScans();
   });
 
   evtSource.onerror = () => {
@@ -477,52 +465,59 @@ function resetUI(msg) {
   document.getElementById('status-text').textContent = msg;
 }
 
-function refreshPastScans() {
-  fetch('/past-scans')
-    .then(r => r.text())
-    .then(html => { document.getElementById('past-scans').innerHTML = html; });
-}
+
 </script>
 </body>
 </html>"""
-
-# ── Past scans HTML helper ────────────────────────────────────────────────────
-def past_scans_html():
-    items = []
-    if OUTPUT_DIR.exists():
-        reports = sorted(OUTPUT_DIR.glob("pqc_report_*.html"), reverse=True)[:10]
-        cboms   = {p.stem.replace("pqc_report_","cbom_"): p for p in reports}
-        for rpt in reports:
-            ts_raw = rpt.stem.replace("pqc_report_","")
-            try:
-                ts = datetime.strptime(ts_raw, "%Y%m%d_%H%M%S").strftime("%Y-%m-%d %H:%M")
-            except Exception:
-                ts = ts_raw
-            cbom_name = "cbom_" + ts_raw + ".json"
-            items.append(
-                f'<div class="past-item">'
-                f'<a href="/report/{rpt.name}" target="_blank">Report {ts}</a>'
-                f'<span class="ts"><a href="/cbom/{cbom_name}" style="color:var(--text3)">JSON</a></span>'
-                f'</div>'
-            )
-    if not items:
-        return '<div class="no-scans">No reports yet.</div>'
-    return "\n".join(items)
 
 
 # ── Routes ────────────────────────────────────────────────────────────────────
 @app.route("/")
 def index():
-    return render_template_string(
-        TEMPLATE,
-        past_scans_html=past_scans_html(),
-        output_dir=str(OUTPUT_DIR),
-    )
+    return render_template_string(TEMPLATE, output_dir=str(OUTPUT_DIR))
 
 
-@app.route("/past-scans")
-def past_scans_route():
-    return past_scans_html()
+def _build_report_nav() -> str:
+    """Sticky nav bar injected into every in-memory report."""
+    return """<div id="report-nav">
+  <a href="/" id="rn-back">← New Scan</a>
+  <span id="rn-title">PQC CBOM Report</span>
+  <button id="rn-download" onclick="downloadReport()">Download HTML ↓</button>
+</div>
+<style>
+  #report-nav {
+    position: sticky; top: 0; z-index: 999;
+    background: rgba(10,12,16,0.96); backdrop-filter: blur(10px);
+    border-bottom: 1px solid #1e2430;
+    padding: 0.6rem 2rem;
+    display: flex; align-items: center; justify-content: space-between; gap: 1rem;
+    font-family: 'IBM Plex Mono', monospace; font-size: 0.75rem;
+  }
+  #rn-back { color: #00e5ff; text-decoration: none; }
+  #rn-back:hover { text-decoration: underline; }
+  #rn-title { color: #4a5266; font-size: 0.68rem; }
+  #rn-download {
+    padding: 0.28rem 0.85rem;
+    background: rgba(0,229,255,0.08); border: 1px solid rgba(0,229,255,0.3);
+    color: #00e5ff; font-family: inherit; font-size: 0.72rem;
+    cursor: pointer; border-radius: 2px; transition: background 0.15s;
+  }
+  #rn-download:hover { background: rgba(0,229,255,0.18); }
+</style>
+<script>
+function downloadReport() {
+  const clone = document.documentElement.cloneNode(true);
+  // Remove the nav bar from the downloaded copy so it's self-contained
+  clone.querySelector('#report-nav')?.remove();
+  const html = '<!DOCTYPE html>\\n' + clone.outerHTML;
+  const blob = new Blob([html], {type: 'text/html'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = 'pqc_report.html';
+  document.body.appendChild(a); a.click();
+  document.body.removeChild(a); URL.revokeObjectURL(a.href);
+}
+</script>"""
 
 
 @app.route("/scan", methods=["POST"])
@@ -530,7 +525,6 @@ def scan():
     data       = request.get_json(force=True)
     hosts      = data.get("hosts", [])
     subdomains = data.get("subdomains", False)
-    report     = data.get("report", True)
     json_only  = data.get("json_only", False)
 
     if not hosts:
@@ -544,8 +538,6 @@ def scan():
         cmd = ["bash", str(SCAN_SH)] + hosts
         if subdomains:
             cmd.append("--subdomains")
-        if report:
-            cmd.append("--report")
         if json_only:
             cmd.append("--json")
 
@@ -563,16 +555,33 @@ def scan():
         except Exception as exc:
             q.put(("line", f"Error running scan: {exc}"))
 
-        # Find the most recently generated report
-        report_file = None
-        if report and OUTPUT_DIR.exists():
-            reports = sorted(OUTPUT_DIR.glob("pqc_report_*.html"), key=lambda p: p.stat().st_mtime, reverse=True)
-            if reports:
-                report_file = reports[0].name
+        # Generate report in memory from the latest CBOM JSON
+        report_id = None
+        try:
+            cbom_files = sorted(
+                OUTPUT_DIR.glob("cbom_*.json"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            if cbom_files:
+                cbom = _load_cbom(str(cbom_files[0]))
+                cbom["_source"] = cbom_files[0].name
+                html = _render_report(cbom)
+                # Inject nav bar right after <body>
+                html = html.replace("<body>", "<body>\n" + _build_report_nav(), 1)
+                report_id = str(uuid.uuid4())
+                _reports[report_id] = {
+                    "html":       html,
+                    "ts":         datetime.utcnow().strftime("%Y-%m-%d %H:%M UTC"),
+                    "n_hosts":    len(cbom.get("assets", [])),
+                    "created_at": time.monotonic(),
+                }
+        except Exception as exc:
+            q.put(("line", f"[report] Could not generate report: {exc}"))
 
-        if report_file:
-            q.put(("report", report_file))
-        q.put(("done", {"hosts": len(hosts), "report": report_file}))
+        if report_id:
+            q.put(("report", report_id))
+        q.put(("done", {"hosts": len(hosts)}))
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"scan_id": scan_id})
@@ -614,21 +623,16 @@ def stream(scan_id):
                     headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no"})
 
 
-@app.route("/report/<filename>")
-def serve_report(filename):
-    path = OUTPUT_DIR / filename
-    if not path.exists() or path.suffix != ".html":
-        return "Not found", 404
-    return send_file(path, mimetype="text/html")
+@app.route("/view/<report_id>")
+def view_report(report_id):
+    meta = _reports.get(report_id)
+    if not meta:
+        return "Report not found (server may have restarted — run a new scan).", 404
+    return Response(meta["html"], mimetype="text/html")
 
 
-@app.route("/cbom/<filename>")
-def serve_cbom(filename):
-    path = OUTPUT_DIR / filename
-    if not path.exists() or path.suffix != ".json":
-        return "Not found", 404
-    return send_file(path, mimetype="application/json")
-
+# ── Start background reaper ───────────────────────────────────────────────────
+threading.Thread(target=_reap_reports, daemon=True, name="report-reaper").start()
 
 # ── Entry point ───────────────────────────────────────────────────────────────
 if __name__ == "__main__":

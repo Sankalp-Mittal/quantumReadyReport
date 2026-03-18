@@ -1,5 +1,0 @@
-google.com
-cloudflare.com
-github.com
-pingala.iitk.ac.in
-pq.cloudflareresearch.com
