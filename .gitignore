@@ -1,5 +1,9 @@
 output/*
+!output/.gitkeep
 claude/*
 __pycache__/*
-bin/
+*.pyc
+bin/*
+!bin/.gitkeep
 *.txt
+!requirements.txt
