@@ -229,6 +229,17 @@ get_recommendations() {
   printf '%s\n' "${recs[@]}"
 }
 
+# ── JSON string escaping ───────────────────────────────────────────
+json_escape() {
+  local s="$1"
+  s="${s//\\/\\\\}"      # \ → \\
+  s="${s//\"/\\\"}"      # " → \"
+  s="${s//$'\n'/ }"      # newline → space
+  s="${s//$'\r'/ }"      # CR → space
+  s="${s//$'\t'/ }"      # tab → space
+  printf '%s' "$s"
+}
+
 # ── Port scanner ───────────────────────────────────────────────────
 COMMON_TLS_PORTS=(443 8443 4433 8080 8880)
 VPN_PORTS=(1194 1723 500 4500)
@@ -275,7 +286,7 @@ scan_host() {
   not_before=$(echo "$raw"  | grep -oP "(?<=NotBefore: ).*?(?= GMT)" | head -1 || echo "unknown")
   not_after=$(echo "$raw"   | grep -oP "(?<=NotAfter: ).*?(?= GMT)"  | head -1 || echo "unknown")
   verify=$(echo "$raw"      | grep -oP "(?<=Verify return code: ).*" | head -1 || echo "unknown")
-  chain_depth=$(echo "$raw" | grep -c "s:CN=" || echo "0")
+  chain_depth=$(echo "$raw" | grep -c "s:CN=" || true)
 
   # Extract cipher components
   local enc_algo hash_algo
@@ -319,32 +330,32 @@ scan_host() {
   [[ "$days_left" -lt 30 ]]         && vulns_json+="\"Certificate expires in ${days_left} days\","
   vulns_json="${vulns_json%,}]"
 
-  # Emit JSON
+  # Emit JSON (all string fields go through json_escape to prevent broken JSON)
   cat <<EOF
 {
-  "host": "${host}",
+  "host": "$(json_escape "$host")",
   "port": ${port},
   "service_type": "${service_type}",
   "scan_time": "$(date -u '+%Y-%m-%dT%H:%M:%SZ')",
   "connection": {
-    "tls_version": "${tls_version}",
-    "cipher_suite": "${cipher}",
-    "enc_algorithm": "${enc_algo}",
-    "hash_algorithm": "${hash_algo}",
-    "verify": "${verify}"
+    "tls_version": "$(json_escape "$tls_version")",
+    "cipher_suite": "$(json_escape "$cipher")",
+    "enc_algorithm": "$(json_escape "$enc_algo")",
+    "hash_algorithm": "$(json_escape "$hash_algo")",
+    "verify": "$(json_escape "$verify")"
   },
   "key_exchange": {
-    "algorithm": "${temp_key}",
+    "algorithm": "$(json_escape "$temp_key")",
     "classification": "${kex_class}"
   },
   "certificate": {
-    "subject": "${subject}",
-    "issuer": "${issuer}",
-    "key_type": "${cert_algo}",
+    "subject": "$(json_escape "$subject")",
+    "issuer": "$(json_escape "$issuer")",
+    "key_type": "$(json_escape "$cert_algo")",
     "key_bits": ${key_bits},
-    "signing_algorithm": "${sign_type}",
-    "not_before": "${not_before}",
-    "not_after": "${not_after}",
+    "signing_algorithm": "$(json_escape "$sign_type")",
+    "not_before": "$(json_escape "$not_before")",
+    "not_after": "$(json_escape "$not_after")",
     "days_until_expiry": ${days_left},
     "chain_depth": ${chain_depth},
     "classification": "${cert_class}"
@@ -578,7 +589,8 @@ if ! $JSON_ONLY; then
 fi
 
 # ── Write CBOM JSON ────────────────────────────────────────────────
-CBOM_FILE="${OUTPUT_DIR}/cbom_$(date +%Y%m%d_%H%M%S).json"
+# Allow the caller (e.g. app.py) to specify the output path via env var
+CBOM_FILE="${PQC_CBOM_OUT:-${OUTPUT_DIR}/cbom_$(date +%Y%m%d_%H%M%S).json}"
 {
   echo "{"
   echo "  \"cbom_version\": \"1.0\","

@@ -33,6 +33,9 @@ _reports: dict[str, dict] = {}
 # scan_id → report_id (set when scan finishes, independent of SSE lifetime)
 _scan_reports: dict[str, str] = {}
 
+# scan_id → Popen process (so /stop can terminate it)
+_procs: dict[str, subprocess.Popen] = {}
+
 # Reports are evicted after this many seconds (default 1 hour, override via env)
 REPORT_TTL = int(os.environ.get("REPORT_TTL", 3600))
 
@@ -196,6 +199,22 @@ TEMPLATE = """<!DOCTYPE html>
   .btn-scan:active { transform: scale(0.98); }
   .btn-scan:disabled { opacity: 0.35; cursor: not-allowed; }
 
+  .btn-stop {
+    width: 100%;
+    padding: 0.75rem 1rem;
+    background: transparent;
+    color: var(--critical);
+    font-family: var(--font-head);
+    font-size: 0.9rem;
+    font-weight: 700;
+    letter-spacing: 0.04em;
+    border: 1px solid var(--critical);
+    border-radius: 2px;
+    cursor: pointer;
+    transition: background 0.15s;
+  }
+  .btn-stop:hover { background: rgba(255,77,77,0.1); }
+
   /* ── Output panel ── */
   .output-panel {
     padding: 1.5rem 2rem;
@@ -332,6 +351,9 @@ TEMPLATE = """<!DOCTYPE html>
     <button class="btn-scan" id="btn-scan" onclick="startScan()">
       Run Scan
     </button>
+    <button class="btn-stop" id="btn-stop" onclick="stopScan()" style="display:none">
+      Stop Scan
+    </button>
 
   </aside>
 
@@ -414,6 +436,8 @@ function startScan() {
   if (evtSource) { evtSource.close(); evtSource = null; }
 
   // POST to /scan → get scan_id, then open SSE stream
+  document.getElementById('btn-stop').style.display = 'block';
+
   fetch('/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -431,6 +455,7 @@ function startScan() {
 }
 
 function openStream(scanId) {
+  _currentScanId = scanId;
   const term = document.getElementById('terminal');
   document.getElementById('status-text').textContent = 'Scanning…';
 
@@ -486,10 +511,21 @@ function appendLine(term, html) {
   term.scrollTop = term.scrollHeight;
 }
 
+let _currentScanId = null;
+
+function stopScan() {
+  if (!_currentScanId) return;
+  fetch(`/stop/${_currentScanId}`, { method: 'POST' });
+  if (evtSource) { evtSource.close(); evtSource = null; }
+  resetUI('Scan stopped');
+}
+
 function resetUI(msg) {
   document.getElementById('btn-scan').disabled = false;
+  document.getElementById('btn-stop').style.display = 'none';
   document.getElementById('spinner').classList.remove('active');
   document.getElementById('status-text').textContent = msg;
+  _currentScanId = null;
 }
 
 
@@ -561,6 +597,8 @@ def scan():
     q: queue.Queue = queue.Queue()
     _streams[scan_id] = q
 
+    cbom_path = OUTPUT_DIR / f"cbom_{scan_id}.json"
+
     def run():
         cmd = ["bash", str(SCAN_SH)] + hosts
         if subdomains:
@@ -568,6 +606,7 @@ def scan():
         if json_only:
             cmd.append("--json")
 
+        env = {**__import__("os").environ, "PQC_CBOM_OUT": str(cbom_path)}
         try:
             proc = subprocess.Popen(
                 cmd,
@@ -575,26 +614,26 @@ def scan():
                 stderr=subprocess.STDOUT,
                 text=True,
                 bufsize=1,
+                env=env,
             )
+            _procs[scan_id] = proc
             for line in proc.stdout:
                 q.put(("line", line.rstrip("\n")))
             proc.wait()
         except Exception as exc:
             q.put(("line", f"Error running scan: {exc}"))
+        finally:
+            _procs.pop(scan_id, None)
 
-        # Generate report in memory from the latest CBOM JSON
+        # Generate report in memory from the CBOM JSON written by this scan
         report_id = None
-        try:
-            cbom_files = sorted(
-                OUTPUT_DIR.glob("cbom_*.json"),
-                key=lambda p: p.stat().st_mtime,
-                reverse=True,
-            )
-            if cbom_files:
-                cbom = _load_cbom(str(cbom_files[0]))
-                cbom["_source"] = cbom_files[0].name
+        if not cbom_path.exists():
+            q.put(("line", f"[report] CBOM file not found — scan may have exited early ({cbom_path.name})"))
+        else:
+            try:
+                cbom = _load_cbom(str(cbom_path))
+                cbom["_source"] = cbom_path.name
                 html = _render_report(cbom)
-                # Inject nav bar right after <body>
                 html = html.replace("<body>", "<body>\n" + _build_report_nav(), 1)
                 report_id = str(uuid.uuid4())
                 _reports[report_id] = {
@@ -603,8 +642,9 @@ def scan():
                     "n_hosts":    len(cbom.get("assets", [])),
                     "created_at": time.monotonic(),
                 }
-        except Exception as exc:
-            q.put(("line", f"[report] Could not generate report: {exc}"))
+            except Exception as exc:
+                q.put(("line", f"[report] Could not generate report: {exc}"))
+                app.logger.exception("Report generation failed for scan %s", scan_id)
 
         if report_id:
             _scan_reports[scan_id] = report_id
@@ -613,6 +653,15 @@ def scan():
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"scan_id": scan_id})
+
+
+@app.route("/stop/<scan_id>", methods=["POST"])
+def stop_scan(scan_id):
+    proc = _procs.get(scan_id)
+    if proc:
+        proc.terminate()
+        return jsonify({"ok": True})
+    return jsonify({"ok": False, "error": "scan not running"}), 404
 
 
 @app.route("/stream/<scan_id>")
