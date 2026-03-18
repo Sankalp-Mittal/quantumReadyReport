@@ -27,8 +27,8 @@ EXPOSE 5000
 # Use gunicorn in production; threaded mode keeps SSE streams alive
 CMD gunicorn \
       --bind 0.0.0.0:${PORT:-5000} \
-      --workers 2 \
-      --threads 8 \
+      --workers 1 \
+      --threads 16 \
       --timeout 660 \
       --worker-class gthread \
       app:app
