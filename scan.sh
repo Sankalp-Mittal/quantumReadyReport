@@ -4,9 +4,10 @@
 #  Usage:
 #    ./scan.sh example.com              # single host
 #    ./scan.sh -f domains.txt           # file of hosts
-#    ./scan.sh example.com --json       # JSON only
-#    ./scan.sh -f domains.txt --report  # full HTML report
-#    ./scan.sh example.com --subdomains # also scan discovered subdomains
+#    ./scan.sh example.com --json       # JSON only (machine-readable)
+#    ./scan.sh example.com --subdomains # include discovered subdomains
+#    ./scan.sh example.com --report     # generate HTML dashboard (CLI only)
+#  Note: HTML report is generated automatically when using the web GUI.
 # ─────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -602,16 +603,14 @@ echo -e "${BOLD}  CBOM saved: ${CBOM_FILE}${RESET}"
 echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════${RESET}"
 echo
 
-# ── Optionally HTML report ───────────────────────────────
+# ── Optionally generate HTML report (CLI only — web GUI handles this automatically) ──
 if $GENERATE_REPORT; then
   REPORT_SCRIPT="${SCRIPT_DIR}/generate_report.py"
   if [[ -f "$REPORT_SCRIPT" ]]; then
     echo -e "${DIM}Generating HTML report...${RESET}"
     python3 "$REPORT_SCRIPT" "$CBOM_FILE"
   else
-    echo -e "${YELLOW}Report generator not found. Run generate_report.py manually.${RESET}"
+    echo -e "${YELLOW}Report generator not found (generate_report.py). Run it manually.${RESET}"
   fi
 fi
-
-echo -e "${DIM}  Tip: run with --report to generate an HTML dashboard${RESET}"
 echo
