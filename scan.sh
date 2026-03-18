@@ -6,6 +6,7 @@
 #    ./scan.sh -f domains.txt           # file of hosts
 #    ./scan.sh example.com --json       # JSON only
 #    ./scan.sh -f domains.txt --report  # full HTML report
+#    ./scan.sh example.com --subdomains # also scan discovered subdomains
 # ─────────────────────────────────────────────────────────────────
 set -euo pipefail
 
@@ -23,6 +24,7 @@ BOLD='\033[1m'; DIM='\033[2m'; RESET='\033[0m'
 HOSTS=()
 JSON_ONLY=false
 GENERATE_REPORT=false
+DISCOVER_SUBDOMAINS=false
 INPUT_FILE=""
 
 usage() {
@@ -33,13 +35,15 @@ usage() {
   echo "  $0 -f <file> [options]"
   echo
   echo "Options:"
-  echo "  -f <file>    File containing one host per line"
-  echo "  --json       Output JSON only (no colour terminal output)"
-  echo "  --report     Generate HTML report after scanning"
-  echo "  -h           Show this help"
+  echo "  -f <file>       File containing one host per line"
+  echo "  --subdomains    Discover subdomains via subfinder before scanning"
+  echo "  --json          Output JSON only (no colour terminal output)"
+  echo "  --report        Generate HTML report after scanning"
+  echo "  -h              Show this help"
   echo
   echo "Examples:"
   echo "  $0 google.com"
+  echo "  $0 example.com --subdomains --report"
   echo "  $0 -f domains.txt --report"
   exit 0
 }
@@ -50,6 +54,7 @@ while [[ $# -gt 0 ]]; do
     -f) INPUT_FILE="$2"; shift 2 ;;
     --json) JSON_ONLY=true; shift ;;
     --report) GENERATE_REPORT=true; shift ;;
+    --subdomains) DISCOVER_SUBDOMAINS=true; shift ;;
     -*) echo "Unknown option: $1"; usage ;;
     *) HOSTS+=("$1"); shift ;;
   esac
@@ -66,6 +71,52 @@ fi
 if [[ ${#HOSTS[@]} -eq 0 ]]; then
   echo -e "${RED}Error: No hosts specified.${RESET}"
   usage
+fi
+
+# ── Subfinder path ─────────────────────────────────────────────────
+# Prefer bundled binary in bin/, fall back to PATH
+SUBFINDER_BIN=""
+if [[ -x "${SCRIPT_DIR}/bin/subfinder" ]]; then
+  SUBFINDER_BIN="${SCRIPT_DIR}/bin/subfinder"
+elif command -v subfinder &>/dev/null; then
+  SUBFINDER_BIN="subfinder"
+fi
+
+# ── Subdomain discovery ────────────────────────────────────────────
+if $DISCOVER_SUBDOMAINS; then
+  if [[ -z "$SUBFINDER_BIN" ]]; then
+    echo -e "${RED}subfinder not found. Place it in bin/subfinder or install it in PATH.${RESET}"
+    echo -e "${DIM}Download: https://github.com/projectdiscovery/subfinder/releases${RESET}"
+    exit 1
+  fi
+
+  EXPANDED_HOSTS=()
+  for h in "${HOSTS[@]}"; do
+    # Strip port for subdomain discovery — subfinder takes a bare domain
+    base_domain="${h%%:*}"
+    port_suffix=""
+    [[ "$h" == *:* ]] && port_suffix=":${h##*:}"
+
+    $JSON_ONLY || echo -e "${DIM}  [subfinder] Discovering subdomains for ${base_domain}...${RESET}"
+
+    mapfile -t subs < <(
+      timeout 120 "$SUBFINDER_BIN" -d "$base_domain" -silent -nW -active 2>/dev/null | sort -u
+    ) || true
+
+    if [[ ${#subs[@]} -eq 0 ]]; then
+      $JSON_ONLY || echo -e "${YELLOW}  No subdomains found for ${base_domain} — scanning root only${RESET}"
+      EXPANDED_HOSTS+=("$h")
+    else
+      $JSON_ONLY || echo -e "${GREEN}  Found ${#subs[@]} subdomain(s) for ${base_domain}${RESET}"
+      # Always include the root domain too
+      EXPANDED_HOSTS+=("$h")
+      for sub in "${subs[@]}"; do
+        EXPANDED_HOSTS+=("${sub}${port_suffix}")
+      done
+    fi
+  done
+
+  HOSTS=("${EXPANDED_HOSTS[@]}")
 fi
 
 # ── Dependency check ───────────────────────────────────────────────
@@ -425,6 +476,9 @@ print_host_report() {
 CBOM_ENTRIES=()
 SCAN_START=$(date -u '+%Y-%m-%dT%H:%M:%SZ')
 
+RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RESET='\033[0m'
+TICK="${GREEN}✔${RESET}"; CROSS="${RED}✘${RESET}"; WARN="${YELLOW}⚠${RESET}"
+
 $JSON_ONLY || {
   echo
   echo -e "${BOLD}${MAGENTA}"
@@ -437,15 +491,13 @@ $JSON_ONLY || {
   echo -e "${RESET}"
   echo -e "${DIM}  Cryptographic Bill of Materials — PQC Readiness Scanner v${VERSION}${RESET}"
   echo -e "${DIM}  Scanning ${#HOSTS[@]} host(s) — $(date -u '+%Y-%m-%d %H:%M UTC')${RESET}"
+  echo
 }
 
-RED='\033[0;31m'; GREEN='\033[0;32m'; YELLOW='\033[1;33m'; RESET='\033[0m'
-TICK="${GREEN}✔${RESET}"; CROSS="${RED}✘${RESET}"; WARN="${YELLOW}⚠${RESET}"
-
+# ── Phase 1: scan all hosts, print one progress line each ──────────
 for host_entry in "${HOSTS[@]}"; do
   # Strip URL scheme and path — only the TLS layer matters, not the HTTP path
   local_entry="$host_entry"
-  # Determine default port from scheme before stripping it
   port="443"
   if echo "$local_entry" | grep -qiE "^https://"; then
     port="443"
@@ -455,11 +507,9 @@ for host_entry in "${HOSTS[@]}"; do
     port="80"
     local_entry="${local_entry#http://}"
   fi
-  # Strip path, query string, fragment
   local_entry="${local_entry%%/*}"
   local_entry="${local_entry%%\?*}"
   local_entry="${local_entry%%#*}"
-  # Support explicit host:port syntax (overrides scheme-derived port)
   if echo "$local_entry" | grep -qP ":\d+$"; then
     host="${local_entry%:*}"
     port="${local_entry##*:}"
@@ -467,19 +517,64 @@ for host_entry in "${HOSTS[@]}"; do
     host="$local_entry"
   fi
 
-  $JSON_ONLY || echo -e "${DIM}  Scanning ${host}:${port}...${RESET}"
+  $JSON_ONLY || echo -e "${DIM}  ▸ Scanning ${host}:${port}...${RESET}"
 
   result=$(scan_host "$host" "$port" "https")
 
   if echo "$result" | grep -q '"error"'; then
-    $JSON_ONLY || echo -e "  ${RED}✘ Could not connect to ${host}:${port}${RESET}"
+    $JSON_ONLY || echo -e "  ${CROSS} ${RED}${host}:${port} — connection failed${RESET}"
     result="{\"host\":\"${host}\",\"port\":${port},\"error\":\"connection_failed\",\"scan_time\":\"$(date -u '+%Y-%m-%dT%H:%M:%SZ')\"}"
   else
-    $JSON_ONLY || print_host_report "$result"
+    label=$(echo "$result" | grep -oP '(?<="label": ")[^"]+')
+    case "$label" in
+      FULLY_QUANTUM_SAFE) $JSON_ONLY || echo -e "  ${TICK} ${GREEN}${host}:${port} — ✦ FULLY QUANTUM SAFE${RESET}" ;;
+      PQC_READY)          $JSON_ONLY || echo -e "  ${TICK} ${CYAN}${host}:${port} — ◈ PQC READY${RESET}" ;;
+      NOT_PQC_READY)      $JSON_ONLY || echo -e "  ${WARN} ${YELLOW}${host}:${port} — ◇ NOT PQC READY${RESET}" ;;
+      CRITICAL)           $JSON_ONLY || echo -e "  ${CROSS} ${RED}${host}:${port} — ✖ CRITICAL${RESET}" ;;
+    esac
   fi
 
   CBOM_ENTRIES+=("$result")
 done
+
+# ── Phase 2: summary table ─────────────────────────────────────────
+if ! $JSON_ONLY; then
+  n_fqs=0; n_pqc=0; n_notpqc=0; n_crit=0; n_err=0
+  for entry in "${CBOM_ENTRIES[@]}"; do
+    if echo "$entry" | grep -q '"error"'; then
+      n_err=$(( n_err + 1 ))
+    else
+      lbl=$(echo "$entry" | grep -oP '(?<="label": ")[^"]+')
+      case "$lbl" in
+        FULLY_QUANTUM_SAFE) n_fqs=$(( n_fqs + 1 ))       ;;
+        PQC_READY)          n_pqc=$(( n_pqc + 1 ))       ;;
+        NOT_PQC_READY)      n_notpqc=$(( n_notpqc + 1 )) ;;
+        CRITICAL)           n_crit=$(( n_crit + 1 ))     ;;
+      esac
+    fi
+  done
+
+  total=${#CBOM_ENTRIES[@]}
+  echo
+  echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════${RESET}"
+  echo -e "${BOLD}  SUMMARY — ${total} host(s) scanned${RESET}"
+  echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════${RESET}"
+  (( n_fqs    > 0 )) && echo -e "  ${GREEN}✦  Fully Quantum Safe : ${n_fqs}${RESET}"
+  (( n_pqc    > 0 )) && echo -e "  ${CYAN}◈  PQC Ready          : ${n_pqc}${RESET}"
+  (( n_notpqc > 0 )) && echo -e "  ${YELLOW}◇  Not PQC Ready      : ${n_notpqc}${RESET}"
+  (( n_crit   > 0 )) && echo -e "  ${RED}✖  Critical           : ${n_crit}${RESET}"
+  (( n_err    > 0 )) && echo -e "  ${DIM}—  Connection errors  : ${n_err}${RESET}"
+  echo -e "${BOLD}${CYAN}══════════════════════════════════════════════════════${RESET}"
+  echo
+fi
+
+# ── Phase 3: full per-host detail ─────────────────────────────────
+if ! $JSON_ONLY; then
+  for entry in "${CBOM_ENTRIES[@]}"; do
+    echo "$entry" | grep -q '"error"' && continue
+    print_host_report "$entry"
+  done
+fi
 
 # ── Write CBOM JSON ────────────────────────────────────────────────
 CBOM_FILE="${OUTPUT_DIR}/cbom_$(date +%Y%m%d_%H%M%S).json"

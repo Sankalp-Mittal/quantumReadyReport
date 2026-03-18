@@ -1,3 +1,5 @@
 output/*
 claude/*
 __pycache__/*
+bin/
+*.txt

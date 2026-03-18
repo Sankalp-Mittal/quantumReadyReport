@@ -89,7 +89,7 @@ TEMPLATE = """<!DOCTYPE html>
     display: grid;
     grid-template-columns: 380px 1fr;
     gap: 0;
-    align-items: start;
+    min-height: 0;
   }
   @media (max-width: 900px) {
     main { grid-template-columns: 1fr; }
@@ -191,7 +191,14 @@ TEMPLATE = """<!DOCTYPE html>
   .no-scans { font-size: 0.75rem; color: var(--text3); }
 
   /* ── Output panel ── */
-  .output-panel { padding: 2rem; display: flex; flex-direction: column; gap: 1.2rem; }
+  .output-panel {
+    padding: 1.5rem 2rem;
+    display: flex;
+    flex-direction: column;
+    gap: 0.8rem;
+    height: calc(100vh - 90px); /* viewport minus header */
+    min-height: 0;
+  }
 
   .output-header {
     display: flex;
@@ -199,6 +206,7 @@ TEMPLATE = """<!DOCTYPE html>
     align-items: center;
     gap: 1rem;
     flex-wrap: wrap;
+    flex-shrink: 0;
   }
   .output-title {
     font-size: 0.65rem;
@@ -226,21 +234,24 @@ TEMPLATE = """<!DOCTYPE html>
     border: 1px solid var(--border);
     border-radius: 2px;
     padding: 1.2rem 1.4rem;
-    min-height: 420px;
-    max-height: 65vh;
+    flex: 1 1 0;
+    min-height: 0;
     overflow-y: auto;
-    font-size: 0.78rem;
-    line-height: 1.7;
+    font-size: 0.82rem;
+    line-height: 1.75;
     white-space: pre-wrap;
-    word-break: break-all;
+    word-break: break-word;
     color: var(--text2);
   }
   .terminal .placeholder { color: var(--text3); font-style: italic; }
-  .terminal .line-ok   { color: var(--fqs); }
-  .terminal .line-warn { color: var(--notpqc); }
-  .terminal .line-err  { color: var(--critical); }
-  .terminal .line-info { color: var(--accent); }
-  .terminal .line-dim  { color: var(--text3); }
+  .terminal .line-ok     { color: var(--fqs); }
+  .terminal .line-pqc    { color: var(--pqc); }
+  .terminal .line-warn   { color: var(--notpqc); }
+  .terminal .line-err    { color: var(--critical); }
+  .terminal .line-info   { color: var(--accent); }
+  .terminal .line-dim    { color: var(--text3); }
+  .terminal .line-bold   { color: #fff; font-weight: 600; }
+  .terminal .line-sep    { color: var(--accent); opacity: 0.5; }
 
   .status-bar {
     display: flex;
@@ -248,6 +259,8 @@ TEMPLATE = """<!DOCTYPE html>
     gap: 0.8rem;
     font-size: 0.72rem;
     color: var(--text3);
+    flex-shrink: 0;
+    height: 1.8rem;
   }
   .spinner {
     display: none;
@@ -301,6 +314,10 @@ TEMPLATE = """<!DOCTYPE html>
     <div class="options-row">
       <div class="panel-title">Options</div>
       <label class="checkbox-row">
+        <input type="checkbox" id="opt-subdomains">
+        Discover subdomains (subfinder)
+      </label>
+      <label class="checkbox-row">
         <input type="checkbox" id="opt-report" checked>
         Generate HTML report
       </label>
@@ -317,7 +334,7 @@ TEMPLATE = """<!DOCTYPE html>
     <div>
       <div class="panel-title" style="margin-bottom:0.8rem;">Past Reports</div>
       <div class="past-scans" id="past-scans">
-        {{ past_scans_html }}
+        {{ past_scans_html | safe }}
       </div>
     </div>
   </aside>
@@ -349,18 +366,33 @@ TEMPLATE = """<!DOCTYPE html>
 let evtSource = null;
 
 function ansiToHtml(line) {
-  // Strip ANSI escape codes for display; apply simple colour classes
-  const clean = line.replace(/\\x1b\\[[0-9;]*m/g, '');
-  if (!clean.trim()) return '<span class="line-dim"> </span>';
+  // Strip all ANSI escape codes
+  const clean = line.replace(/\x1b\\[[0-9;]*m/g, '').replace(/\x1b\\[[0-9;]*[A-Za-z]/g, '');
+  if (!clean.trim()) return '<span class="line-dim">&nbsp;</span>';
 
-  // Colour coding by content
-  if (/FULLY.QUANTUM.SAFE|✦/.test(clean))  return `<span class="line-ok">${esc(clean)}</span>`;
-  if (/PQC.READY|◈/.test(clean))           return `<span class="line-ok">${esc(clean)}</span>`;
-  if (/NOT.PQC.READY|◇/.test(clean))       return `<span class="line-warn">${esc(clean)}</span>`;
-  if (/CRITICAL|✖|Error|error|failed/.test(clean)) return `<span class="line-err">${esc(clean)}</span>`;
-  if (/Scanning|CBOM saved|Report generated|═+/.test(clean)) return `<span class="line-info">${esc(clean)}</span>`;
-  if (/^\\s*#|^\\s*$/.test(clean))         return `<span class="line-dim">${esc(clean)}</span>`;
-  return `<span>${esc(clean)}</span>`;
+  const e = esc(clean);
+
+  // Separators / box-drawing
+  if (/═{4,}/.test(clean))                           return `<span class="line-sep">${e}</span>`;
+  // Labels
+  if (/FULLY.QUANTUM.SAFE|✦/.test(clean))            return `<span class="line-ok">${e}</span>`;
+  if (/◈.*PQC.READY/.test(clean) && !/NOT/.test(clean)) return `<span class="line-pqc">${e}</span>`;
+  if (/NOT.PQC.READY|◇/.test(clean))                 return `<span class="line-warn">${e}</span>`;
+  if (/CRITICAL|✖/.test(clean))                      return `<span class="line-err">${e}</span>`;
+  // Progress / status
+  if (/connection failed|Could not connect|✘/.test(clean)) return `<span class="line-err">${e}</span>`;
+  if (/[\u25b8] Scanning|subfinder|Discovering/.test(clean))   return `<span class="line-dim">${e}</span>`;
+  if (/SUMMARY|CBOM saved|Report generated/.test(clean))        return `<span class="line-bold">${e}</span>`;
+  if (/Scanning [0-9]+|host.s./.test(clean))                     return `<span class="line-dim">${e}</span>`;
+  // Section headers inside host report
+  if (/^(Connection|Quantum Analysis|Certificate Details|Recommendations)$/.test(clean.trim()))
+                                                         return `<span class="line-bold">${e}</span>`;
+  // Quantum dot lines
+  if (/Key exchange.*→|Certificate.*→|Data encrypt.*→/.test(clean)) return `<span>${e}</span>`;
+  // Dimmed detail lines
+  if (/^ *(Subject|Issuer|Expires|Chain|TLS version|Cipher suite|Cert verify) *:/.test(clean))
+                                                     return `<span class="line-dim">${e}</span>`;
+  return `<span>${e}</span>`;
 }
 
 function esc(s) {
@@ -371,9 +403,10 @@ function startScan() {
   const hostsRaw = document.getElementById('hosts').value.trim();
   if (!hostsRaw) { alert('Enter at least one host.'); return; }
 
-  const hosts   = hostsRaw.split('\\n').map(h => h.trim()).filter(Boolean);
-  const report  = document.getElementById('opt-report').checked;
-  const jsonOnly= document.getElementById('opt-json').checked;
+  const hosts      = hostsRaw.split('\\n').map(h => h.trim()).filter(Boolean);
+  const subdomains = document.getElementById('opt-subdomains').checked;
+  const report     = document.getElementById('opt-report').checked;
+  const jsonOnly   = document.getElementById('opt-json').checked;
 
   // Reset UI
   const term = document.getElementById('terminal');
@@ -389,7 +422,7 @@ function startScan() {
   fetch('/scan', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ hosts, report, json_only: jsonOnly })
+    body: JSON.stringify({ hosts, subdomains, report, json_only: jsonOnly })
   })
   .then(r => r.json())
   .then(data => {
@@ -494,10 +527,11 @@ def past_scans_route():
 
 @app.route("/scan", methods=["POST"])
 def scan():
-    data      = request.get_json(force=True)
-    hosts     = data.get("hosts", [])
-    report    = data.get("report", True)
-    json_only = data.get("json_only", False)
+    data       = request.get_json(force=True)
+    hosts      = data.get("hosts", [])
+    subdomains = data.get("subdomains", False)
+    report     = data.get("report", True)
+    json_only  = data.get("json_only", False)
 
     if not hosts:
         return jsonify({"error": "No hosts provided"}), 400
@@ -508,6 +542,8 @@ def scan():
 
     def run():
         cmd = ["bash", str(SCAN_SH)] + hosts
+        if subdomains:
+            cmd.append("--subdomains")
         if report:
             cmd.append("--report")
         if json_only:
@@ -534,9 +570,9 @@ def scan():
             if reports:
                 report_file = reports[0].name
 
-        q.put(("done", {"hosts": len(hosts), "report": report_file}))
         if report_file:
             q.put(("report", report_file))
+        q.put(("done", {"hosts": len(hosts), "report": report_file}))
 
     threading.Thread(target=run, daemon=True).start()
     return jsonify({"scan_id": scan_id})
@@ -549,12 +585,19 @@ def stream(scan_id):
         return Response("data: unknown scan_id\n\n", mimetype="text/event-stream")
 
     def generate():
+        import json as _json
+        import time
+        deadline = time.monotonic() + 600  # 10-minute hard cap
         while True:
-            try:
-                event, payload = q.get(timeout=30)
-            except queue.Empty:
+            if time.monotonic() > deadline:
                 yield "event: done\ndata: {}\n\n"
                 break
+            try:
+                event, payload = q.get(timeout=5)
+            except queue.Empty:
+                # Send a keepalive SSE comment so the browser doesn't close the connection
+                yield ": keepalive\n\n"
+                continue
 
             if event == "line":
                 safe_payload = payload.replace("\n", "\\n")
@@ -562,7 +605,6 @@ def stream(scan_id):
             elif event == "report":
                 yield f"event: report\ndata: {payload}\n\n"
             elif event == "done":
-                import json as _json
                 yield f"event: done\ndata: {_json.dumps(payload)}\n\n"
                 break
 
