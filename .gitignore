@@ -8,3 +8,4 @@ bin/*
 *.txt
 !requirements.txt
 *.pem
+connect.sh
