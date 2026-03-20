@@ -1,0 +1,208 @@
+\chapter{Overall Description}
+\label{chap:overall_desc}
+
+\section{Product Perspective}
+\label{sec:product_perspective}
+
+The PQC CBOM Scanner is a \textbf{standalone, self-contained web application} that
+operates as an active TLS interrogation tool. It does not depend on any external
+monitoring infrastructure, SIEM, or certificate inventory service. The system sits
+entirely within a single Docker container and communicates outward only to the
+user-specified target hosts.
+
+\subsection{Context Diagram}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    sys/.style  = {rectangle, rounded corners=8pt, draw=primary, line width=1.8pt,
+                   fill=sectionblue!12, text width=3cm, align=center,
+                   minimum height=1.3cm, font=\small\bfseries},
+    ext/.style  = {rectangle, rounded corners=5pt, draw=gray!60, line width=1pt,
+                   fill=gray!8, text width=2.6cm, align=center,
+                   minimum height=1.1cm, font=\small},
+    arr/.style  = {-Stealth, thick},
+    rarr/.style = {Stealth-, thick},
+    lbl/.style  = {font=\scriptsize\itshape, fill=white, inner sep=1pt}
+  ]
+  % Central system
+  \node[sys] (scanner) at (0,0)
+    {\textcolor{primary}{PQC CBOM}\\\textcolor{primary}{Scanner}\\{\tiny(quantumCheck)}};
+
+  % External entities
+  \node[ext] (user)     at (-5,  0)   {End User\\{\tiny Browser / CLI}};
+  \node[ext] (targets)  at ( 5,  0)   {Target Hosts\\{\tiny TCP/443 (TLS)}};
+  \node[ext] (subfinder)at ( 0, -3.2) {Subfinder\\{\tiny Subdomain Enum}};
+  \node[ext] (internet) at ( 5, -3.2) {Public Internet\\{\tiny DNS / CT Logs}};
+  \node[ext] (report)   at ( 0,  3.2) {HTML Report\\{\tiny Browser View}};
+
+  % Arrows
+  \draw[arr,  color=sectionblue] (user)      -- node[lbl,above]{scan request}      (scanner);
+  \draw[arr,  color=sectionblue] (scanner)   -- node[lbl,above]{TLS handshake}      (targets);
+  \draw[rarr, color=sectionblue] (scanner)   -- node[lbl,right]{terminal output}    (user);
+  \draw[arr,  color=sectionblue] (scanner)   -- node[lbl,right]{enumerate domains}  (subfinder);
+  \draw[arr,  color=gray!70]     (subfinder) -- node[lbl,above]{DNS/CT queries}     (internet);
+  \draw[arr,  color=sectionblue] (scanner)   -- node[lbl,right]{generate}           (report);
+  \draw[arr,  color=sectionblue] (report)    -- node[lbl,right]{view}               (user);
+\end{tikzpicture}
+\caption{System Context Diagram — PQC CBOM Scanner and its external entities}
+\label{fig:context_diagram}
+\end{figure}
+
+\noindent The system interacts with three external entities:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{End User} — accesses the web GUI via a browser or invokes the
+        CLI scanner directly.
+  \item \textbf{Target Hosts} — public-facing web servers whose TLS configuration
+        is assessed. The scanner initiates outbound connections on TCP port~443
+        (or user-specified ports).
+  \item \textbf{Subfinder Service} — an optional embedded binary that performs
+        passive and active subdomain enumeration by querying public DNS and
+        certificate transparency logs.
+\end{enumerate}
+
+\subsection{Relationship to Existing Systems}
+
+The tool is positioned as a \textit{pre-migration assessment utility} in a broader
+PQC migration workflow:
+
+\begin{center}
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+    node distance = 0.4cm and 1.0cm,
+    box/.style = {rectangle, rounded corners=4pt, draw=sectionblue,
+                  fill=sectionblue!10, text width=2.4cm, align=center,
+                  minimum height=1.0cm, font=\small},
+    arrow/.style = {-Stealth, thick, color=primary}
+  ]
+  \node[box] (inv)   {Asset\\Inventory};
+  \node[box, right=of inv]  (scan) {\textbf{PQC CBOM\\Scanner}};
+  \node[box, right=of scan] (plan) {Migration\\Planning};
+  \node[box, right=of plan] (impl) {PQC\\Implementation};
+  \node[box, right=of impl] (mon)  {Continuous\\Monitoring};
+
+  \draw[arrow] (inv)  -- (scan);
+  \draw[arrow] (scan) -- (plan);
+  \draw[arrow] (plan) -- (impl);
+  \draw[arrow] (impl) -- (mon);
+  \draw[arrow, dashed, bend right=25] (mon.south) to node[below,font=\tiny]{re-scan} (scan.south);
+\end{tikzpicture}%
+}
+\end{center}
+
+\section{Product Functions}
+\label{sec:product_functions}
+
+At a high level, the PQC CBOM Scanner provides the following functions:
+
+\begin{table}[H]
+  \centering
+  \caption{High-Level Product Functions}
+  \label{tab:product_functions}
+  \begin{tabularx}{\textwidth}{C{0.5cm} L{4cm} L{9.5cm}}
+    \toprule
+    \textbf{\#} & \textbf{Function} & \textbf{Description} \\
+    \midrule
+    F1 & TLS Scanning        & Establish TLS handshakes and extract cipher,
+                               key exchange, and certificate metadata. \\
+    F2 & Subdomain Discovery & Enumerate subdomains of a root domain and
+                               include them in the scan scope. \\
+    F3 & Quantum Assessment  & Classify each asset against a four-tier PQC
+                               readiness framework. \\
+    F4 & CBOM Generation     & Produce a structured JSON Cryptographic Bill
+                               of Materials. \\
+    F5 & HTML Report         & Render a self-contained interactive HTML
+                               dashboard summarising findings. \\
+    F6 & Web GUI             & Provide a browser-based interface for scan
+                               configuration, execution, and result viewing. \\
+    F7 & Scan Control        & Allow users to start and stop scans in real time. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{User Classes and Characteristics}
+\label{sec:user_classes}
+
+\begin{table}[H]
+  \centering
+  \caption{User Classes}
+  \label{tab:user_classes}
+  \begin{tabularx}{\textwidth}{L{2.8cm} L{3.5cm} L{8cm}}
+    \toprule
+    \textbf{User Class} & \textbf{Technical Level} & \textbf{Primary Use Case} \\
+    \midrule
+    Security Analyst    & High   & Perform bulk TLS audits, interpret CBOM
+                                   JSON output, integrate into workflows. \\
+    System Administrator & Medium & Identify vulnerable servers before
+                                   compliance deadlines; use Web GUI. \\
+    CISO / Security Manager & Low & Review HTML dashboard to gauge
+                                   organisation-wide quantum readiness. \\
+    Developer / DevOps  & Medium & Run CLI scanner as part of CI/CD pipelines
+                                   or infrastructure testing. \\
+    Hackathon Evaluator & Varies & Assess tool correctness, UX, and alignment
+                                   to NIST standards. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Operating Environment}
+\label{sec:operating_env}
+
+\begin{table}[H]
+  \centering
+  \caption{Operating Environment}
+  \label{tab:operating_env}
+  \begin{tabularx}{\textwidth}{L{3.5cm} L{10cm}}
+    \toprule
+    \textbf{Component}       & \textbf{Requirement} \\
+    \midrule
+    Host OS                  & Any OS capable of running Docker (Linux,
+                               macOS, Windows with WSL2). \\
+    Container Runtime        & Docker Engine $\geq$ 20.10 or compatible
+                               OCI runtime. \\
+    Python Version           & Python 3.11 (within container). \\
+    Shell Environment        & Bash 5.x (within container). \\
+    OpenSSL Version          & OpenSSL $\geq$ 3.0 (within container). \\
+    Network Access           & Outbound TCP/443 (or custom port) to target
+                               hosts from the container. \\
+    Browser (Web GUI)        & Any modern browser (Chrome $\geq$~90,
+                               Firefox $\geq$~88, Edge $\geq$~90). \\
+    Display Resolution       & $\geq$ 1280\texttimes720 recommended for
+                               optimal dashboard layout. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Design and Implementation Constraints}
+\label{sec:design_constraints}
+
+\begin{itemize}[noitemsep]
+  \item The scanner relies on \texttt{openssl s\_client} and therefore inherits
+        its support matrix for TLS extensions and PQC algorithms. OpenSSL
+        versions below 3.5 may not report ML-KEM key exchange natively.
+  \item The web server uses a \textbf{single Gunicorn worker} to ensure that
+        in-memory scan and report state is consistent across concurrent requests.
+  \item Long-running scans may exceed browser SSE connection timeouts; a 2-hour
+        hard deadline is enforced server-side.
+  \item Subdomain discovery requires the embedded Subfinder binary
+        (\texttt{bin/subfinder}); if absent, subdomain discovery is silently
+        skipped.
+  \item The system does not persist data to disk beyond the \texttt{output/}
+        directory; there is no database backend.
+\end{itemize}
+
+\section{Assumptions and Dependencies}
+\label{sec:assumptions}
+
+\begin{itemize}[noitemsep]
+  \item Target hosts are reachable via the network from the Docker container.
+  \item Target hosts use TCP port~443 by default (overridable via
+        \texttt{host:port} syntax).
+  \item The OpenSSL binary included in the container supports TLS~1.3.
+  \item The Subfinder binary bundled in the image is version 2.13.0
+        (Linux x86\_64); alternative architectures require rebuilding the image.
+  \item The user has basic familiarity with web browsers and network hostnames.
+  \item The tool assumes good-faith use; it does not implement rate limiting
+        or access control beyond OS-level process permissions.
+\end{itemize}

@@ -1,0 +1,139 @@
+\chapter{Introduction}
+\label{chap:introduction}
+
+\section{Purpose}
+\label{sec:purpose}
+
+This Software Requirements Specification (SRS) document describes the functional and
+non-functional requirements for the \textbf{PQC CBOM Scanner} — a web-based
+cybersecurity assessment tool that audits public-facing servers for post-quantum
+cryptography (PQC) readiness.
+
+The document is intended for the following audiences:
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Development Team} — as a binding technical specification during
+        implementation and testing.
+  \item \textbf{Security Evaluators} — as a baseline for verifying that the system
+        correctly classifies TLS configurations against NIST PQC standards.
+  \item \textbf{Hackathon Judges / Reviewers} — as a structured description of the
+        project scope, design decisions, and requirements.
+  \item \textbf{End Users} — as a reference for understanding system capabilities
+        and expected behaviour.
+\end{itemize}
+
+\section{Scope}
+\label{sec:scope}
+
+The \textbf{PQC CBOM Scanner} (project codename: \textit{quantumCheck}) is a
+full-stack cybersecurity tool that:
+
+\begin{enumerate}[noitemsep]
+  \item Establishes TLS handshakes with one or more user-supplied hostnames.
+  \item Extracts a complete \textbf{Cryptographic Bill of Materials (CBOM)} from
+        each TLS session, including cipher suite, key exchange mechanism,
+        certificate details, and signature algorithms.
+  \item Classifies each scanned asset against a four-tier quantum readiness
+        framework aligned to NIST FIPS 203, 204, and 205.
+  \item Generates a machine-readable JSON CBOM and a self-contained interactive
+        HTML dashboard report.
+  \item Optionally discovers and scans subdomains of a root domain using the
+        Subfinder tool.
+\end{enumerate}
+
+The system is delivered as a \textbf{Dockerised web application} (Flask / Gunicorn)
+with a dual interface: a browser-based GUI and a command-line interface.
+
+\textbf{Out of scope:}
+\begin{itemize}[noitemsep]
+  \item Active exploitation or penetration testing of target hosts.
+  \item Certificate Authority (CA) management or certificate issuance.
+  \item Remediation automation (the tool provides guidance, not automated fixes).
+  \item Support for non-TLS protocols (SSH, IPsec, etc.) in v1.0.
+\end{itemize}
+
+\section{Definitions, Acronyms, and Abbreviations}
+\label{sec:definitions}
+
+\begin{longtable}{L{3cm} L{11cm}}
+  \toprule
+  \textbf{Term} & \textbf{Definition} \\
+  \midrule
+  \endhead
+  \bottomrule
+  \endfoot
+  %
+  CBOM     & \textit{Cryptographic Bill of Materials} — a structured inventory
+             of all cryptographic primitives used in a system or communication
+             session. \\
+  PQC      & \textit{Post-Quantum Cryptography} — cryptographic algorithms
+             designed to resist attacks from quantum computers. \\
+  TLS      & \textit{Transport Layer Security} — the standard protocol for
+             encrypted communication over a network. \\
+  NIST     & \textit{National Institute of Standards and Technology} — the US
+             federal body responsible for cryptographic standards. \\
+  FIPS     & \textit{Federal Information Processing Standard} — e.g.\
+             FIPS~203 (ML-KEM), FIPS~204 (ML-DSA), FIPS~205 (SLH-DSA). \\
+  ML-KEM   & \textit{Module-Lattice-based Key Encapsulation Mechanism}
+             (Kyber) — a NIST-standardised PQC key exchange algorithm. \\
+  ML-DSA   & \textit{Module-Lattice-based Digital Signature Algorithm}
+             (Dilithium) — a NIST-standardised PQC signature scheme. \\
+  SLH-DSA  & \textit{Stateless Hash-Based Digital Signature Algorithm}
+             (SPHINCS+) — a NIST-standardised PQC signature scheme. \\
+  FN-DSA   & \textit{Falcon Digital Signature Algorithm} — another NIST
+             PQC signature standard. \\
+  ECDSA    & \textit{Elliptic Curve Digital Signature Algorithm}. \\
+  ECDH     & \textit{Elliptic Curve Diffie-Hellman} key exchange. \\
+  RSA      & \textit{Rivest–Shamir–Adleman} public-key cryptosystem. \\
+  HNDL     & \textit{Harvest Now, Decrypt Later} — a threat model where
+             adversaries collect encrypted traffic today to decrypt it once
+             quantum computers mature. \\
+  FQS      & \textit{Fully Quantum Safe} — highest readiness tier. \\
+  SSE      & \textit{Server-Sent Events} — a web API for streaming data from
+             server to client. \\
+  GUI      & \textit{Graphical User Interface}. \\
+  CLI      & \textit{Command-Line Interface}. \\
+  WSGI     & \textit{Web Server Gateway Interface} — Python web server standard. \\
+  SRS      & \textit{Software Requirements Specification}. \\
+\end{longtable}
+
+\section{References}
+\label{sec:references}
+
+\begin{enumerate}[noitemsep, label={[\arabic*]}]
+  \item NIST FIPS 203 — \textit{Module-Lattice-Based Key-Encapsulation Mechanism
+        Standard (ML-KEM)}, August 2024.
+  \item NIST FIPS 204 — \textit{Module-Lattice-Based Digital Signature Standard
+        (ML-DSA)}, August 2024.
+  \item NIST FIPS 205 — \textit{Stateless Hash-Based Digital Signature Standard
+        (SLH-DSA)}, August 2024.
+  \item IEEE Std 830-1998 — \textit{IEEE Recommended Practice for Software
+        Requirements Specifications}.
+  \item RFC 8446 — \textit{The Transport Layer Security (TLS) Protocol Version 1.3},
+        IETF, 2018.
+  \item OWASP Cryptographic Failures — \textit{OWASP Top 10 2021, A02}.
+  \item ProjectDiscovery Subfinder — \url{https://github.com/projectdiscovery/subfinder}.
+  \item NIST NCCoE Migration to Post-Quantum Cryptography Project, SP 1800-38.
+\end{enumerate}
+
+\section{Document Overview}
+\label{sec:doc_overview}
+
+The remainder of this SRS is structured as follows:
+
+\begin{description}[noitemsep, leftmargin=2cm]
+  \item[Chapter~\ref{chap:overall_desc}] provides a product overview, user classes,
+        operating environment, and assumptions.
+  \item[Chapter~\ref{chap:functional}] specifies all functional requirements grouped
+        by system feature.
+  \item[Chapter~\ref{chap:external_interfaces}] describes user, hardware, software,
+        and communication interfaces.
+  \item[Chapter~\ref{chap:nonfunctional}] defines non-functional requirements
+        (performance, security, reliability, portability).
+  \item[Chapter~\ref{chap:architecture}] presents the system architecture, data
+        flow, and deployment model.
+  \item[Chapter~\ref{chap:constraints}] lists design constraints, legal
+        considerations, and dependencies.
+  \item[Chapter~\ref{chap:appendix}] contains the CBOM JSON schema, quantum
+        classification logic table, and version history.
+\end{description}

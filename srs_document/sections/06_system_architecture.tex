@@ -1,0 +1,380 @@
+\chapter{System Architecture}
+\label{chap:architecture}
+
+\section{Architectural Overview}
+\label{sec:arch_overview}
+
+The PQC CBOM Scanner follows a \textbf{three-tier architecture} within a single
+Docker container:
+
+\begin{enumerate}[noitemsep]
+  \item \textbf{Presentation Tier} — Flask-served HTML/JS/CSS web GUI and
+        generated HTML report.
+  \item \textbf{Application Tier} — Flask application (\texttt{app.py}) managing
+        scan orchestration, SSE streaming, process lifecycle, and report storage.
+  \item \textbf{Processing Tier} — Bash scanner (\texttt{scan.sh}) performing
+        TLS interrogation and CBOM construction; Python report generator
+        (\texttt{generate\_report.py}).
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    tier/.style  = {rectangle, rounded corners=6pt, draw=sectionblue, line width=1.5pt,
+                    fill=sectionblue!8, minimum width=13cm, minimum height=2.2cm,
+                    text width=12.5cm, align=center, font=\small},
+    tlbl/.style  = {font=\footnotesize\bfseries\color{sectionblue}},
+    comp/.style  = {rectangle, rounded corners=4pt, draw=sectionblue!70,
+                    fill=white, minimum height=0.9cm, text width=3cm,
+                    align=center, font=\scriptsize\bfseries},
+    ext/.style   = {rectangle, rounded corners=4pt, draw=gray!50, dashed,
+                    fill=gray!6, minimum height=0.9cm, text width=2.8cm,
+                    align=center, font=\scriptsize},
+    arr/.style   = {-Stealth, thick, color=primary}
+  ]
+
+  % ── Tier 1: Presentation ──────────────────────────────────────────────────
+  \node[tier, fill=safe!6, draw=safe!60] (t1) at (0, 4.2) {};
+  \node[tlbl, anchor=west] at (-6.25, 4.2) {Tier 1 — Presentation};
+  \node[comp, fill=safe!10, draw=safe!60] at (-3,  4.2) {Web GUI\\{\tiny index.html / JS}};
+  \node[comp, fill=safe!10, draw=safe!60] at ( 0,  4.2) {HTML Report\\{\tiny self-contained}};
+  \node[ext]                              at ( 3,  4.2) {Browser\\{\tiny Chrome/Firefox/Edge}};
+
+  % ── Tier 2: Application ──────────────────────────────────────────────────
+  \node[tier, fill=primary!5, draw=primary!50] (t2) at (0, 2.0) {};
+  \node[tlbl, anchor=west] at (-6.25, 2.0) {Tier 2 — Application};
+  \node[comp, fill=primary!10, draw=primary!50] at (-3, 2.0) {Flask / Gunicorn\\{\tiny app.py}};
+  \node[comp, fill=primary!10, draw=primary!50] at ( 0, 2.0) {SSE Stream\\{\tiny /stream/<id>}};
+  \node[comp, fill=primary!10, draw=primary!50] at ( 3, 2.0) {Report Store\\{\tiny in-memory + TTL}};
+
+  % ── Tier 3: Processing ───────────────────────────────────────────────────
+  \node[tier, fill=notpqc!5, draw=notpqc!50] (t3) at (0, -0.2) {};
+  \node[tlbl, anchor=west] at (-6.25, -0.2) {Tier 3 — Processing};
+  \node[comp, fill=notpqc!10, draw=notpqc!50] at (-3.5, -0.2) {scan.sh\\{\tiny Bash + OpenSSL}};
+  \node[comp, fill=notpqc!10, draw=notpqc!50] at ( 0,   -0.2) {generate\_report.py\\{\tiny Python}};
+  \node[ext]                                  at ( 3.5, -0.2) {Subfinder\\{\tiny bin/subfinder}};
+
+  % ── External ─────────────────────────────────────────────────────────────
+  \node[ext] (hosts) at (0, -2.2) {Target Hosts \quad output/ (CBOM JSON)};
+
+  % ── Inter-tier arrows ────────────────────────────────────────────────────
+  \draw[arr] (0, 3.1) -- (0, 2.5);   % Presentation → Application
+  \draw[arr] (0, 1.5) -- (0, 0.3);   % Application  → Processing
+  \draw[arr] (0,-0.7) -- (0,-1.8);   % Processing   → External
+\end{tikzpicture}
+\caption{System Architecture Diagram — Three-tier component overview}
+\label{fig:arch_overview}
+\end{figure}
+
+\section{Component Diagram}
+\label{sec:component_diagram}
+
+\begin{center}
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+    component/.style = {
+      rectangle, rounded corners=5pt,
+      draw=sectionblue, fill=sectionblue!10,
+      text width=2.8cm, align=center,
+      minimum height=1.1cm, font=\small\bfseries
+    },
+    external/.style = {
+      rectangle, rounded corners=5pt,
+      draw=gray!60, fill=gray!10,
+      text width=2.6cm, align=center,
+      minimum height=1.0cm, font=\small, dashed
+    },
+    arrow/.style  = {-Stealth, thick, color=sectionblue},
+    darrow/.style = {Stealth-Stealth, thick, color=primary},
+    lbl/.style    = {font=\scriptsize\itshape, color=gray!80}
+  ]
+
+  % Column 1 — x=0
+  \node[external]   at (0,  0)    (browser)   {Browser\\(GUI / Report)};
+
+  % Column 2 — x=4.5
+  \node[component]  at (4.5, 0)   (flask)     {app.py\\(Flask / Gunicorn)};
+
+  % Column 3 — x=9 (top and bottom)
+  \node[component]  at (9,  1.8)  (report)    {generate\_report.py\\(Python)};
+  \node[component]  at (9, -1.8)  (scan)      {scan.sh\\(Bash + OpenSSL)};
+
+  % Column 4 — x=13.5
+  \node[external]   at (13.5, 1.8) (targets)  {Target Hosts\\(TCP/443)};
+  \node[external]   at (13.5, 0)   (output)   {output/\\(CBOM JSON)};
+  \node[external]   at (13.5,-1.8) (subfinder){Subfinder\\(bin/subfinder)};
+
+  % Arrows
+  \draw[darrow] (browser)  -- node[above, lbl]{HTTP / SSE}   (flask);
+  \draw[arrow]  (flask)    -- node[above, lbl]{invoke}        (report);
+  \draw[arrow]  (flask)    -- node[below, lbl]{spawn}         (scan);
+  \draw[arrow]  (scan)     -- node[above, lbl]{TLS handshake} (targets);
+  \draw[arrow]  (scan)     -- node[above, lbl]{write JSON}    (output);
+  \draw[arrow]  (scan)     -- node[above, lbl]{enumerate}     (subfinder);
+  \draw[arrow]  (report)   -- node[above, lbl]{read JSON}     (output);
+  \draw[arrow]  (report.west) .. controls +(left:1.5) and +(up:1.5) ..
+                node[left, lbl]{HTML} (flask.north);
+  \draw[arrow]  (scan.west)  .. controls +(left:1.5) and +(down:1.5) ..
+                node[left, lbl]{stdout} (flask.south);
+\end{tikzpicture}%
+}
+\end{center}
+
+\section{Data Flow}
+\label{sec:data_flow}
+
+\subsection{Scan Pipeline}
+
+The following sequence describes the end-to-end data flow for a typical web GUI scan:
+
+\begin{enumerate}[noitemsep, leftmargin=1.8cm, label=\textbf{Step \arabic*.}]
+  \item User submits host list and options via the Web GUI form
+        (\texttt{POST /scan}).
+  \item \texttt{app.py} assigns a unique \texttt{scan\_id}, stores options in
+        memory, and spawns \texttt{scan.sh} as a subprocess.
+  \item Browser opens an SSE connection to \texttt{GET /stream/<scan\_id>}.
+  \item \texttt{scan.sh} (optionally) runs Subfinder to expand the host list.
+  \item For each host, \texttt{scan.sh} invokes \texttt{openssl s\_client}
+        and parses the TLS handshake output.
+  \item Parsed fields are classified (key exchange, certificate, symmetric) and
+        a quantum label is assigned.
+  \item Each host's CBOM entry (JSON) is appended to the CBOM file in
+        \texttt{output/}.
+  \item Human-readable output lines are written to \texttt{stdout}; Flask reads
+        these and forwards each line as an SSE event to the browser.
+  \item After all hosts are processed, \texttt{scan.sh} emits a
+        \texttt{done} marker.
+  \item Flask reads the CBOM JSON, passes it to \texttt{generate\_report.py},
+        and stores the rendered HTML in memory under a \texttt{report\_id}.
+  \item Flask emits a \texttt{report} SSE event containing the \texttt{report\_id}.
+  \item Browser displays a \textit{View Report} link pointing to
+        \texttt{GET /view/<report\_id>}.
+\end{enumerate}
+
+\begin{figure}[H]
+\centering
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+    actor/.style  = {rectangle, rounded corners=4pt, draw=sectionblue, line width=1.2pt,
+                     fill=sectionblue!12, text width=2.4cm, align=center,
+                     minimum height=0.9cm, font=\scriptsize\bfseries},
+    life/.style   = {draw=sectionblue!40, dashed, line width=0.8pt},
+    msg/.style    = {-Stealth, thick, color=sectionblue},
+    ret/.style    = {-Stealth, thick, color=gray!70, dashed},
+    note/.style   = {font=\scriptsize, color=sectionblue!80},
+    act/.style    = {rectangle, fill=sectionblue!20, draw=sectionblue, minimum width=0.25cm}
+  ]
+
+  % ── Actor headers ─────────────────────────────────────────────────────────
+  \node[actor] (browser)  at ( 0, 0) {Browser};
+  \node[actor] (flask)    at ( 4, 0) {Flask\\(app.py)};
+  \node[actor] (scan)     at ( 8, 0) {scan.sh};
+  \node[actor] (openssl)  at (12, 0) {OpenSSL};
+  \node[actor] (report)   at (16, 0) {report.py};
+
+  % ── Lifelines ─────────────────────────────────────────────────────────────
+  \foreach \x in {0,4,8,12,16}
+    \draw[life] (\x,-0.45) -- (\x,-12.5);
+
+  % ── Messages ──────────────────────────────────────────────────────────────
+  % 1
+  \draw[msg] ( 0,-1.2) -- node[above,note]{POST /scan (hosts, options)} ( 4,-1.2);
+  % 2
+  \draw[msg] ( 4,-2.0) -- node[above,note]{spawn subprocess} ( 8,-2.0);
+  % 3
+  \draw[msg] ( 0,-2.8) -- node[above,note]{GET /stream/\{id\} (SSE open)} ( 4,-2.8);
+  % 4
+  \draw[msg] ( 8,-3.6) -- node[above,note]{s\_client handshake} (12,-3.6);
+  \draw[ret] (12,-4.2) -- node[above,note]{TLS data (cert, cipher, KEX)} ( 8,-4.2);
+  % 5
+  \draw[msg] ( 8,-5.0) -- node[above,note]{classify \& build JSON entry} ( 8,-5.0);
+  % 6 — SSE line event
+  \draw[ret] ( 4,-5.8) -- node[above,note]{SSE: line event (terminal output)} ( 0,-5.8);
+  % (repeat loop annotation)
+  \draw[dashed, color=gray!50, rounded corners=3pt]
+    (2.2,-3.2) rectangle (13.8,-6.2);
+  \node[font=\scriptsize\itshape, color=gray] at (8,-6.5) {loop [for each host]};
+  % 7 — scan done
+  \draw[ret] ( 8,-7.2) -- node[above,note]{stdout: done marker} ( 4,-7.2);
+  % 8 — invoke report gen
+  \draw[msg] ( 4,-8.0) -- node[above,note]{invoke(cbom\_json)} (16,-8.0);
+  \draw[ret] (16,-8.8) -- node[above,note]{rendered HTML} ( 4,-8.8);
+  % 9 — SSE report event
+  \draw[ret] ( 4,-9.6) -- node[above,note]{SSE: report event (report\_id)} ( 0,-9.6);
+  % 10 — view report
+  \draw[msg] ( 0,-10.4) -- node[above,note]{GET /view/\{report\_id\}} ( 4,-10.4);
+  \draw[ret] ( 4,-11.2) -- node[above,note]{200 OK — HTML report page} ( 0,-11.2);
+
+\end{tikzpicture}%
+}
+\caption{Sequence Diagram — End-to-end scan and report flow}
+\label{fig:sequence_diagram}
+\end{figure}
+
+\subsection{CBOM Assembly}
+
+\begin{center}
+\resizebox{\textwidth}{!}{%
+\begin{tikzpicture}[
+    node distance = 0.5cm,
+    stage/.style = {rectangle, rounded corners=4pt, draw=sectionblue,
+                    fill=sectionblue!8, text width=2.8cm, align=center,
+                    minimum height=1cm, font=\small},
+    arrow/.style = {-Stealth, thick, color=primary}
+  ]
+  \node[stage] (input)    {Host Input\\(user-supplied)};
+  \node[stage, right=0.9cm of input]    (tls)      {TLS Handshake\\(openssl)};
+  \node[stage, right=0.9cm of tls]      (parse)    {Field Extraction\\(bash regex)};
+  \node[stage, right=0.9cm of parse]    (classify) {Classification\\(bash logic)};
+  \node[stage, right=0.9cm of classify] (json)     {CBOM JSON\\(per-asset entry)};
+
+  \draw[arrow] (input)    -- (tls);
+  \draw[arrow] (tls)      -- (parse);
+  \draw[arrow] (parse)    -- (classify);
+  \draw[arrow] (classify) -- (json);
+\end{tikzpicture}%
+}
+\end{center}
+
+\section{Deployment Architecture}
+\label{sec:deployment}
+
+\subsection{Docker Container}
+
+\begin{figure}[H]
+\centering
+\begin{tikzpicture}[
+    host/.style     = {rectangle, rounded corners=8pt, draw=gray!60, line width=1.2pt,
+                       fill=gray!5, text width=11.5cm, minimum height=7.5cm},
+    container/.style= {rectangle, rounded corners=6pt, draw=primary, line width=1.5pt,
+                       fill=primary!5, text width=9.5cm, minimum height=5.8cm},
+    comp/.style     = {rectangle, rounded corners=4pt, draw=sectionblue, line width=0.9pt,
+                       fill=sectionblue!10, text width=2.4cm, align=center,
+                       minimum height=0.85cm, font=\scriptsize\bfseries},
+    vol/.style      = {rectangle, rounded corners=3pt, draw=notpqc!70, line width=0.9pt,
+                       fill=notpqc!8, text width=2.4cm, align=center,
+                       minimum height=0.85cm, font=\scriptsize},
+    ext/.style      = {rectangle, rounded corners=4pt, draw=gray!50, dashed,
+                       fill=gray!8, text width=2.2cm, align=center,
+                       minimum height=0.85cm, font=\scriptsize},
+    lbl/.style      = {font=\scriptsize\itshape, color=gray},
+    arr/.style      = {-Stealth, thick, color=primary},
+    earr/.style     = {-Stealth, thick, color=gray!60}
+  ]
+
+  % ── Host OS box ────────────────────────────────────────────────────────────
+  \node[host] (hostbox) at (0,0) {};
+  \node[font=\footnotesize\bfseries\color{gray!70}, anchor=north west]
+    at (-5.75, 3.75) {Host OS (Linux / macOS / Windows WSL2)};
+
+  % ── Docker container box ───────────────────────────────────────────────────
+  \node[container] (dockerbox) at (0.2, -0.3) {};
+  \node[font=\footnotesize\bfseries\color{primary}, anchor=north west]
+    at (-4.55, 2.6) {\textbf{Docker Container} \quad python:3.11-slim};
+
+  % ── Internal components ────────────────────────────────────────────────────
+  \node[comp] (gunicorn) at (-2.8,  1.3) {Gunicorn\\{\tiny 1 worker / 16 threads}};
+  \node[comp] (flask2)   at ( 0.2,  1.3) {Flask\\{\tiny app.py}};
+  \node[comp] (bash)     at (-2.8, -0.2) {scan.sh\\{\tiny Bash + OpenSSL}};
+  \node[comp] (genrep)   at ( 0.2, -0.2) {generate\_report.py\\{\tiny Python}};
+  \node[comp] (subfind)  at ( 3.2, -0.2) {Subfinder\\{\tiny v2.13.0}};
+  \node[vol]  (output)   at ( 0.2, -1.5) {output/\\{\tiny CBOM JSON files}};
+
+  % ── Port label ─────────────────────────────────────────────────────────────
+  \node[font=\scriptsize\bfseries, color=primary] at (3.2, 1.3)
+    {\texttt{:5000/TCP}};
+
+  % ── Internal arrows ────────────────────────────────────────────────────────
+  \draw[arr] (gunicorn) -- (flask2);
+  \draw[arr] (flask2.south) -- (bash.north east);
+  \draw[arr] (flask2.south) -- (genrep.north);
+  \draw[arr] (bash)     -- (subfind);
+  \draw[arr] (bash.south) |- (output.west);
+  \draw[arr] (genrep.south) -- (output.north);
+
+  % ── External entities ──────────────────────────────────────────────────────
+  \node[ext] (browser2) at (-7.8,  1.3) {Browser\\{\tiny HTTP / SSE}};
+  \node[ext] (tgthosts) at ( 7.8,  0.3) {Target Hosts\\{\tiny TCP/443}};
+  \node[ext] (internet2)at ( 7.8, -1.1) {Internet\\{\tiny DNS / CT Logs}};
+
+  % ── External arrows ────────────────────────────────────────────────────────
+  \draw[earr] (browser2) -- node[above, lbl]{port 5000} (gunicorn);
+  \draw[earr] (bash.east) -- ++(0.6,0) |- node[right, lbl]{TLS} (tgthosts);
+  \draw[earr] (subfind.east) -- ++(0.3,0) |- node[right, lbl]{queries} (internet2);
+
+\end{tikzpicture}
+\caption{Deployment Diagram — Docker container with internal components and external connections}
+\label{fig:deployment_diagram}
+\end{figure}
+
+\begin{table}[H]
+  \centering
+  \caption{Container Configuration}
+  \label{tab:container_config}
+  \begin{tabularx}{\textwidth}{L{4cm} L{10cm}}
+    \toprule
+    \textbf{Parameter}     & \textbf{Value} \\
+    \midrule
+    Base Image             & \texttt{python:3.11-slim} \\
+    Exposed Port           & \texttt{5000/TCP} \\
+    Entry Point            & Gunicorn (\texttt{app:app}) \\
+    Workers                & 1 (single worker for shared memory state) \\
+    Threads per Worker     & 16 (gthread worker class) \\
+    Worker Timeout         & 660 seconds (11 minutes) \\
+    Key System Packages    & \texttt{openssl}, \texttt{bash}, \texttt{coreutils},
+                             \texttt{curl} \\
+    Bundled Binaries       & Subfinder v2.13.0 (Linux x86\_64) \\
+    Writable Volume        & \texttt{output/} — CBOM JSON and report files \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\subsection{Concurrency Model}
+
+The application uses a \textbf{threaded concurrency model} within a single OS process:
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Main thread (Gunicorn)} — handles HTTP requests, SSE connections,
+        and scan lifecycle API calls.
+  \item \textbf{Scan subprocess} — \texttt{scan.sh} runs as a child process;
+        its PID is stored to enable stop-on-demand.
+  \item \textbf{Background reaper thread} — a Python \texttt{daemon} thread that
+        periodically evicts expired reports from in-memory storage.
+  \item \textbf{SSE reader thread (per scan)} — a thread that reads scanner
+        stdout and pushes lines into a \texttt{Queue} for SSE consumers.
+\end{itemize}
+
+\begin{notebox}
+  Because report state is held in a Python dict (in-memory), only a single
+  Gunicorn worker is configured. Scaling to multiple workers would require
+  an external cache (e.g.\ Redis) for shared state.
+\end{notebox}
+
+\section{Key Algorithmic Decisions}
+\label{sec:algo_decisions}
+
+\subsection{Root Domain Approximation}
+
+The report generator groups hosts by root domain using a simple
+\textbf{eTLD+1 approximation}: the last two labels of the hostname
+(e.g.\ \texttt{example.com} from \texttt{api.example.com}). Port numbers
+are stripped before grouping.
+
+\subsection{Severity Ordering for Domain Groups}
+
+When a root domain has multiple subdomains with different quantum labels,
+the domain group's overall severity is determined by the \textbf{worst}
+label among all its hosts, using the ordering:
+
+\[
+  \text{FQS} = 0 \;<\; \text{PQC} = 1 \;<\; \text{NOT\_PQC} = 3 \;<\;
+  \text{CRITICAL} = 4
+\]
+
+\subsection{JSON Escaping in Bash}
+
+The scanner uses a custom \texttt{json\_escape()} Bash function that
+performs character-by-character escaping of backslashes, double quotes,
+and control characters to ensure CBOM JSON is always valid — a critical
+requirement given that certificate subject fields can contain arbitrary
+Unicode and punctuation.

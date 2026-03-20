@@ -1,0 +1,184 @@
+\chapter{Appendix}
+\label{chap:appendix}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{CBOM JSON Schema}
+\label{sec:cbom_schema}
+
+The following describes the structure of the CBOM JSON file produced by the scanner.
+Fields marked \texttt{[opt]} are optional (present only when applicable).
+
+\begin{lstlisting}[language={},caption={CBOM JSON Schema},label=lst:cbom_schema]
+{
+  "scan_start":  "<ISO-8601 timestamp>",
+  "scan_end":    "<ISO-8601 timestamp>",
+  "host_count":  <integer>,
+  "assets": [
+    {
+      "host":    "<hostname or IP>",
+      "port":    <integer>,
+
+      "connection": {
+        "tls_version":    "<TLS 1.0 | 1.1 | 1.2 | 1.3 | unknown>",
+        "cipher_suite":   "<cipher name>",
+        "verified":       <true | false>,
+        "error":          "<error message>"  [opt]
+      },
+
+      "key_exchange": {
+        "type":      "<pqc_hybrid | pqc_pure | classical | unknown>",
+        "algorithm": "<X25519 | X25519Kyber768 | ML-KEM-768 | ...>"
+      },
+
+      "certificate": {
+        "subject":         "<Distinguished Name>",
+        "issuer":          "<Distinguished Name>",
+        "algorithm":       "<RSA | ECDSA | ML-DSA | SLH-DSA | ...>",
+        "key_bits":        <integer>,
+        "type":            "<pqc | rsa | ecdsa | unknown>",
+        "not_before":      "<date string>",
+        "not_after":       "<date string>",
+        "days_until_expiry": <integer>,
+        "chain_depth":     <integer>
+      },
+
+      "symmetric": {
+        "cipher": "<AES-256-GCM | AES-128-GCM | ChaCha20 | 3DES | ...>",
+        "class":  "<safe | marginal | broken | unknown>"
+      },
+
+      "quantum": {
+        "label":           "<FULLY_QUANTUM_SAFE | PQC_READY |
+                             NOT_PQC_READY | CRITICAL>",
+        "display":         "<[FQS] Fully Quantum Safe | [PQC] PQC Ready |
+                             [NOT] Not PQC Ready | [CRIT] Critical>",
+        "vulnerabilities": ["<string>", ...],
+        "recommendations": ["<string>", ...]
+      },
+
+      "scan_timestamp": "<ISO-8601 timestamp>"
+    }
+  ]
+}
+\end{lstlisting}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Quantum Classification Decision Table}
+\label{sec:classification_table}
+
+The following truth table defines the mapping from component classifications
+to quantum readiness labels. Priority is evaluated top-to-bottom; the first
+matching row determines the label.
+
+\begin{table}[H]
+  \centering
+  \caption{Classification Decision Table}
+  \label{tab:classification}
+  \begin{tabularx}{\textwidth}{C{2.2cm} C{2.2cm} C{2.4cm} L{4.2cm} L{3.6cm}}
+    \toprule
+    \textbf{Key Exchange} & \textbf{Certificate} & \textbf{Symmetric} &
+    \textbf{Label} & \textbf{Display} \\
+    \midrule
+    Any & Any & \texttt{broken} &
+      {\footnotesize\texttt{CRITICAL}} &
+      \textcolor{critical}{\textbf{\critsym{} Critical}} \\
+    \addlinespace
+    \texttt{pqc\_*} & \texttt{pqc} & \texttt{safe} &
+      {\footnotesize\texttt{FULLY\_QUANTUM\_SAFE}} &
+      \textcolor{safe}{\textbf{\fqssym{} FQ Safe}} \\
+    \addlinespace
+    \texttt{pqc\_*} & \texttt{rsa}/\texttt{ecdsa} & \texttt{safe} &
+      {\footnotesize\texttt{PQC\_READY}} &
+      \textcolor{pqcready}{\textbf{\pqcsym{} PQC Ready}} \\
+    \addlinespace
+    \texttt{pqc\_*} & \texttt{pqc} & \texttt{marginal} &
+      {\footnotesize\texttt{PQC\_READY}} &
+      \textcolor{pqcready}{\textbf{\pqcsym{} PQC Ready}} \\
+    \addlinespace
+    \texttt{classical} & Any & \texttt{safe}/\texttt{marginal} &
+      {\footnotesize\texttt{NOT\_PQC\_READY}} &
+      \textcolor{notpqc}{\textbf{\notpqcsym{} Not Ready}} \\
+    \addlinespace
+    Any & \texttt{rsa}/\texttt{ecdsa} & \texttt{marginal} &
+      {\footnotesize\texttt{NOT\_PQC\_READY}} &
+      \textcolor{notpqc}{\textbf{\notpqcsym{} Not Ready}} \\
+    \addlinespace
+    \texttt{unknown} & Any & Any &
+      {\footnotesize\texttt{NOT\_PQC\_READY}} &
+      \textcolor{notpqc}{\textbf{\notpqcsym{} Not Ready}} \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Environment Variables Reference}
+\label{sec:env_vars}
+
+\begin{table}[H]
+  \centering
+  \caption{Supported Environment Variables}
+  \label{tab:env_vars}
+  \begin{tabularx}{\textwidth}{L{3.5cm} L{2.5cm} L{8cm}}
+    \toprule
+    \textbf{Variable} & \textbf{Default} & \textbf{Description} \\
+    \midrule
+    \texttt{PORT}           & \texttt{5000}  & TCP port on which the Flask
+                                               application listens. \\
+    \texttt{REPORT\_TTL}    & \texttt{3600}  & Seconds before an in-memory report
+                                               is evicted (1 hour). \\
+    \texttt{PQC\_CBOM\_OUT} & auto-generated & Full path for the CBOM JSON output
+                                               file; set automatically by
+                                               \texttt{app.py} when launching
+                                               \texttt{scan.sh}. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Document Revision History}
+\label{sec:revision_history}
+
+\begin{table}[H]
+  \centering
+  \caption{Revision History}
+  \label{tab:revision_history}
+  \begin{tabularx}{\textwidth}{C{1.5cm} C{2.5cm} L{3cm} L{6.5cm}}
+    \toprule
+    \textbf{Version} & \textbf{Date} & \textbf{Author} & \textbf{Description} \\
+    \midrule
+    0.1  & 2026-03-01 & quantumCheck Team & Initial draft — introduction and
+                                           scope. \\
+    0.5  & 2026-03-10 & quantumCheck Team & Added functional requirements,
+                                           architecture, and interface sections. \\
+    1.0  & 2026-03-20 & quantumCheck Team & Final draft for hackathon submission;
+                                           all sections complete. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Glossary of Quantum Computing Threats}
+\label{sec:quantum_threats}
+
+\begin{description}[noitemsep, leftmargin=2cm]
+  \item[Shor's Algorithm] A quantum algorithm (1994) that can factor large
+    integers and compute discrete logarithms in polynomial time, breaking
+    RSA, ECDSA, ECDH, and Diffie-Hellman. Practical execution requires a
+    cryptographically-relevant quantum computer (CRQC) with millions of
+    logical qubits.
+  \item[Grover's Algorithm] A quantum search algorithm that provides a
+    quadratic speedup for unstructured search, effectively halving the
+    bit-security of symmetric ciphers. AES-128 is reduced to ~64-bit
+    security; AES-256 retains ~128-bit security.
+  \item[CRQC] Cryptographically Relevant Quantum Computer — a hypothetical
+    future device capable of running Shor's algorithm at scale to break
+    current public-key cryptography.
+  \item[Harvest Now, Decrypt Later (HNDL)] A threat strategy where adversaries
+    capture and store encrypted ciphertext today with the intention of
+    decrypting it once a CRQC becomes available. TLS key exchange is the
+    primary target.
+  \item[Hybrid Key Exchange] A TLS key exchange that combines a classical
+    algorithm (e.g.\ X25519) with a PQC algorithm (e.g.\ Kyber) so that
+    security holds as long as \textit{either} algorithm remains unbroken.
+    Represented by \texttt{X25519Kyber768} in TLS extensions.
+\end{description}

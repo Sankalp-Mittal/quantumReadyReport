@@ -9,3 +9,7 @@ bin/*
 !requirements.txt
 *.pem
 connect.sh
+
+main.*
+!*.tex
+!*.pdf

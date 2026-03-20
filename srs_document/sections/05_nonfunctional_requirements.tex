@@ -1,0 +1,182 @@
+\chapter{Non-Functional Requirements}
+\label{chap:nonfunctional}
+
+Non-functional requirements are identified with the prefix \textbf{NFR-}.
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Performance Requirements}
+\label{sec:perf}
+
+\begin{reqbox}{NFR-P.1 — Per-Host Scan Timeout}
+  Each TLS handshake attempt \textbf{shall} complete or time out within
+  \textbf{8 seconds}, ensuring predictable throughput when scanning large host
+  lists. \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-P.2 — Subdomain Discovery Timeout}
+  Subfinder execution per root domain \textbf{shall} be capped at
+  \textbf{120 seconds} to prevent the overall scan from hanging indefinitely.
+  \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-P.3 — SSE Stream Hard Deadline}
+  Each Server-Sent Events stream \textbf{shall} be terminated after a maximum
+  of \textbf{2 hours} server-side to prevent resource leaks from abandoned
+  browser connections. \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-P.4 — Concurrent Request Capacity}
+  The Gunicorn configuration with \textbf{1 worker and 16 threads}
+  \textbf{shall} support at least 8 simultaneous SSE connections and
+  associated background scan jobs without degradation. \hfill \textbf{[S]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-P.5 — Report Generation Latency}
+  HTML report generation from a complete CBOM JSON \textbf{shall} complete
+  within \textbf{5 seconds} for scan results containing up to 500 hosts.
+  \hfill \textbf{[S]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-P.6 — UI Responsiveness}
+  The web GUI \textbf{shall} remain responsive (non-blocking user interaction)
+  during active scanning; SSE streaming \textbf{shall not} freeze the browser tab.
+  \hfill \textbf{[M]}
+\end{reqbox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Security Requirements}
+\label{sec:security}
+
+\begin{reqbox}{NFR-S.1 — No Persistent Secret Storage}
+  The system \textbf{shall not} store, log, or transmit any private keys,
+  session tokens, or user credentials. The application is read-only with respect
+  to target host data. \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-S.2 — Input Sanitisation}
+  Host input provided by the user \textbf{shall} be validated and sanitised
+  before being passed to shell commands to prevent command injection.
+  \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-S.3 — No Destructive Operations on Targets}
+  The scanner \textbf{shall} perform only passive TLS interrogation (initiating
+  a standard TLS handshake). No vulnerability exploitation, fuzzing, or denial
+  of service techniques \textbf{shall} be employed. \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-S.4 — Container Isolation}
+  When deployed via Docker, the application \textbf{shall} run as a non-root
+  user inside the container to minimise the blast radius of any security
+  vulnerability. \hfill \textbf{[S]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-S.5 — CBOM Data Confidentiality}
+  CBOM JSON files written to \texttt{output/} \textbf{shall} be readable
+  only by the OS user running the container. No report \textbf{shall} be
+  exposed to the public internet without explicit user action. \hfill \textbf{[S]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-S.6 — XSS Prevention in Report}
+  All host-derived data embedded in the HTML report \textbf{shall} be HTML-escaped
+  to prevent cross-site scripting (XSS) if the report is viewed in a shared
+  browser context. \hfill \textbf{[M]}
+\end{reqbox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Reliability and Availability}
+\label{sec:reliability}
+
+\begin{reqbox}{NFR-R.1 — Graceful Connection Failure Handling}
+  A failed TLS connection to any individual host \textbf{shall not} abort the
+  scan of remaining hosts; the failure \textbf{shall} be recorded in the CBOM
+  and scanning \textbf{shall} continue. \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-R.2 — JSON Output Validity}
+  The CBOM JSON produced by the scanner \textbf{shall} always be valid,
+  well-formed JSON. Special characters in hostnames, certificate fields, or
+  cipher names \textbf{shall} be properly escaped. \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-R.3 — Report Generation on Partial Failure}
+  If one or more hosts in a scan produce errors, the HTML report
+  \textbf{shall} still be generated for all hosts that were successfully
+  scanned. \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-R.4 — Memory Leak Prevention}
+  The background report reaper thread \textbf{shall} prevent unbounded
+  accumulation of in-memory reports by evicting entries that exceed the TTL.
+  \hfill \textbf{[M]}
+\end{reqbox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Maintainability}
+\label{sec:maintainability}
+
+\begin{reqbox}{NFR-M.1 — Modular Architecture}
+  The system \textbf{shall} maintain a clear separation of concerns:
+  \begin{itemize}[noitemsep]
+    \item \texttt{scan.sh} — TLS scanning and CBOM JSON generation.
+    \item \texttt{app.py} — Web server, SSE streaming, process management.
+    \item \texttt{generate\_report.py} — HTML report rendering.
+  \end{itemize}
+  \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-M.2 — Classification Logic Isolation}
+  Quantum readiness classification logic \textbf{shall} be implemented in a
+  single, clearly labelled block within \texttt{scan.sh} so that updates
+  to NIST standards can be applied by editing one location. \hfill \textbf{[S]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-M.3 — Environment-Based Configuration}
+  All tunable parameters (port, TTL, output path) \textbf{shall} be
+  configurable via environment variables with sensible defaults, requiring
+  no code changes for deployment customisation. \hfill \textbf{[S]}
+\end{reqbox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Portability}
+\label{sec:portability}
+
+\begin{reqbox}{NFR-PO.1 — Docker Portability}
+  The application \textbf{shall} be fully self-contained within its Docker
+  image, including all runtime dependencies (Python, Flask, OpenSSL, Bash,
+  Subfinder), requiring only Docker Engine on the host. \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-PO.2 — Architecture Note}
+  The bundled Subfinder binary targets Linux x86\_64. For ARM64 or other
+  architectures, the Dockerfile \textbf{shall} be rebuilt with the appropriate
+  binary. The rest of the application \textbf{shall} be architecture-agnostic.
+  \hfill \textbf{[S]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-PO.3 — Browser Compatibility}
+  The web GUI and HTML report \textbf{shall} render correctly in all
+  evergreen browsers (Chrome, Firefox, Edge, Safari) without requiring
+  browser plugins or extensions. \hfill \textbf{[M]}
+\end{reqbox}
+
+% ─────────────────────────────────────────────────────────────────────────────
+\section{Usability}
+\label{sec:usability}
+
+\begin{reqbox}{NFR-U.1 — Colour-Coded Tier Display}
+  All four quantum readiness tiers \textbf{shall} be visually distinguished
+  by consistent colour coding across the terminal output, HTML report, and
+  asset cards (Table~\ref{tab:ui_colours}). \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-U.2 — Zero-Installation Web Access}
+  A user \textbf{shall} be able to use the full Web GUI without installing any
+  software beyond Docker; no Node.js, npm, or frontend build step is required.
+  \hfill \textbf{[M]}
+\end{reqbox}
+
+\begin{reqbox}{NFR-U.3 — Offline Report Viewing}
+  A downloaded HTML report \textbf{shall} be fully viewable offline without
+  any network request. \hfill \textbf{[M]}
+\end{reqbox}

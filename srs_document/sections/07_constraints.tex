@@ -1,0 +1,121 @@
+\chapter{Other Requirements and Constraints}
+\label{chap:constraints}
+
+\section{Legal and Ethical Constraints}
+\label{sec:legal}
+
+\begin{itemize}[noitemsep]
+  \item The PQC CBOM Scanner performs \textbf{active TLS interrogation} of target
+        hosts. Users are responsible for ensuring they have appropriate authorisation
+        to scan any host they supply. Unauthorised scanning of third-party servers
+        may violate the Computer Misuse Act 1990 (UK), 18~U.S.C. §~1030 (US CFAA),
+        or equivalent legislation in other jurisdictions.
+  \item The tool does \textbf{not} exploit any vulnerability; it initiates standard
+        TLS handshakes identical to those initiated by a web browser.
+  \item The application does \textbf{not} store, transmit, or exfiltrate private
+        keys or session secrets from target hosts.
+  \item Certificate transparency log queries performed by Subfinder are a normal
+        and publicly expected behaviour of subdomain enumeration; however, users
+        should be aware that Subfinder's DNS queries may be visible to the DNS
+        resolver.
+\end{itemize}
+
+\section{Standards Compliance}
+\label{sec:standards}
+
+\begin{table}[H]
+  \centering
+  \caption{Standards and Compliance References}
+  \label{tab:standards}
+  \begin{tabularx}{\textwidth}{L{3.5cm} L{10cm}}
+    \toprule
+    \textbf{Standard} & \textbf{Relevance} \\
+    \midrule
+    NIST FIPS 203     & ML-KEM standard; defines PQC key exchange algorithms
+                        recognised as \textit{pqc\_hybrid} or \textit{pqc\_pure}. \\
+    NIST FIPS 204     & ML-DSA standard; defines PQC signature algorithms that
+                        classify a certificate as \textit{pqc}. \\
+    NIST FIPS 205     & SLH-DSA standard; additional PQC signature scheme
+                        recognised in certificate classification. \\
+    RFC 8446          & TLS 1.3 specification; defines handshake fields parsed
+                        by the scanner. \\
+    IEEE 830-1998     & This SRS document conforms to this recommended practice
+                        for software requirements specifications. \\
+    OWASP Top 10 A02  & Cryptographic Failures category; the scanner identifies
+                        conditions matching this vulnerability class. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
+
+\section{Resource Constraints}
+\label{sec:resource_constraints}
+
+\begin{itemize}[noitemsep]
+  \item \textbf{Memory}: In-memory report storage is bounded by TTL eviction
+        (default 1 hour). For scan results of 500+ hosts, peak RSS memory usage
+        should remain under 512~MB.
+  \item \textbf{Disk}: The \texttt{output/} directory grows with each scan.
+        Users are responsible for periodic clean-up; no automatic purging of
+        CBOM JSON files is implemented.
+  \item \textbf{Network bandwidth}: Each TLS handshake consumes $<$~5~KB of
+        data. Subfinder subdomain discovery may issue hundreds of DNS queries
+        per root domain.
+  \item \textbf{CPU}: Scanning is I/O-bound (network timeouts dominate); CPU
+        usage is expected to remain low even for large host lists.
+\end{itemize}
+
+\section{Known Limitations}
+\label{sec:limitations}
+
+\begin{itemize}[noitemsep]
+  \item \textbf{OpenSSL PQC Support}: Standard OpenSSL $<$~3.5 does not expose
+        ML-KEM key exchange in \texttt{s\_client} output. Hosts using
+        X25519Kyber768 may report as classical key exchange on older OpenSSL
+        builds.
+  \item \textbf{Single-Worker Constraint}: The single Gunicorn worker means the
+        application is not horizontally scalable without architectural changes
+        (shared state store).
+  \item \textbf{Protocol Scope}: Only TLS-based connections are assessed.
+        SSH, IPsec, S/MIME, and application-layer cryptography are out of scope
+        for v1.0.
+  \item \textbf{Certificate Chain}: Only the leaf (end-entity) certificate is
+        fully parsed. Intermediate CA certificates are counted for chain depth
+        but not individually assessed.
+  \item \textbf{Subfinder Architecture}: The bundled binary is Linux x86\_64 only.
+  \item \textbf{Report Persistence}: Reports are in-memory only and are lost on
+        server restart. Users should download the HTML report before restarting.
+\end{itemize}
+
+\section{Future Enhancements (Roadmap)}
+\label{sec:roadmap}
+
+The following capabilities are considered for future releases:
+
+\begin{table}[H]
+  \centering
+  \caption{Potential Future Enhancements}
+  \label{tab:roadmap}
+  \begin{tabularx}{\textwidth}{C{0.5cm} L{4.5cm} L{9cm}}
+    \toprule
+    \textbf{\#} & \textbf{Feature} & \textbf{Description} \\
+    \midrule
+    R1 & SSH/IPsec Scanning     & Extend CBOM coverage to non-TLS cryptographic
+                                  channels. \\
+    R2 & CI/CD GitHub Action    & Publish a GitHub Action that runs the scanner
+                                  on deployment and fails the pipeline if any host
+                                  is \textit{Critical}. \\
+    R3 & Persistent Storage     & SQLite or PostgreSQL backend for multi-session
+                                  report history and trend analysis. \\
+    R4 & PDF Report Export      & Generate a PDF version of the HTML report using
+                                  headless Chrome or WeasyPrint. \\
+    R5 & SBOM/CBOM Integration  & Export CBOM in CycloneDX JSON format for
+                                  integration with existing SBOM toolchains. \\
+    R6 & ARM64 Docker Image     & Multi-arch Docker build with appropriate
+                                  Subfinder binary for ARM64 hosts. \\
+    R7 & Scheduled Scanning     & Cron-triggered periodic scans with email or
+                                  webhook notifications on status changes. \\
+    R8 & OpenSSL 3.5 PQC        & Leverage native ML-KEM support in OpenSSL~3.5
+                                  for more accurate key exchange detection. \\
+    \bottomrule
+  \end{tabularx}
+\end{table}
